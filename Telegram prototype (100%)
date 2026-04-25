@@ -1,11 +1,9 @@
-вот мой проект, работающий с базой данных psql. переделай его так, чтобы он работал с базой данных sqlite3, которую ты создал ранее.
 import asyncio
 import logging
 import sys
+import sqlite3
 from typing import Dict, List, Optional
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import RealDictCursor
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
@@ -30,15 +28,9 @@ logger = logging.getLogger(__name__)
 
 class Config:
     def __init__(self):
-        self.db_config = {
-            'host': 'localhost',
-            'port': '5432',
-            'database': 'admissions_bot',
-            'user': 'bot_userr',
-            'password': 'bot_passwordd'
-        }
-        self.bot_token = '8558541426:AAEJr874IQ_5S46Z-xlFNW1cTj3PWO0LVoY'
-        self.admin_ids = [5332787371, 8399585547]
+        self.db_path = 'db_name.db'
+        self.bot_token = 'token'
+        self.admin_ids = [telegram_id (not username, not phone number)]
         self.bell_schedule = """
 🕐 *Расписание звонков:*
 
@@ -110,32 +102,38 @@ class Database:
 
     def connect(self):
         try:
-            self.connection = psycopg2.connect(
-                **self.config.db_config,
-                cursor_factory=RealDictCursor
-            )
-            self.connection.set_client_encoding('UTF8')
-            logger.info("Успешное подключение к базе данных")
+            self.connection = sqlite3.connect(self.config.db_path)
+            self.connection.row_factory = sqlite3.Row
+            self.connection.execute("PRAGMA foreign_keys = ON")
+            logger.info(f"Успешное подключение к базе данных SQLite: {self.config.db_path}")
         except Exception as e:
             logger.error(f"Ошибка подключения к БД: {e}")
             raise
 
     def execute_query(self, query: str, params: tuple = None, fetch: bool = True):
         try:
-            if self.connection is None or self.connection.closed:
+            if self.connection is None:
                 self.connect()
-            with self.connection.cursor() as cursor:
-                cursor.execute(query, params or ())
-                if fetch:
-                    if query.strip().upper().startswith('SELECT'):
-                        result = cursor.fetchall()
-                        return result
-                    elif query.strip().upper().startswith('INSERT'):
-                        self.connection.commit()
-                        return cursor.fetchone() if cursor.rowcount > 0 else None
+            cursor = self.connection.cursor()
+            cursor.execute(query, params or ())
+            if fetch:
+                if query.strip().upper().startswith('SELECT'):
+                    result = cursor.fetchall()
+                    # Конвертируем sqlite3.Row в dict для совместимости с old code
+                    return [dict(row) for row in result] if result else []
+                elif query.strip().upper().startswith('INSERT'):
+                    self.connection.commit()
+                    if cursor.lastrowid:
+                        if 'RETURNING' in query.upper():
+                            pass
+                        return {'lastrowid': cursor.lastrowid}
+                    return None
                 else:
                     self.connection.commit()
-                    return None
+                    return {'rowcount': cursor.rowcount} if cursor.rowcount > 0 else None
+            else:
+                self.connection.commit()
+                return None
         except Exception as e:
             logger.error(f"Ошибка выполнения запроса: {e}")
             if self.connection:
@@ -143,22 +141,33 @@ class Database:
             raise
 
     def get_or_create_user(self, user_data: Dict) -> Dict:
-        query = """
-        INSERT INTO users (user_id, username, first_name, last_name, registered_at)
-        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (user_id) DO UPDATE SET
-            username = EXCLUDED.username,
-            first_name = EXCLUDED.first_name,
-            last_name = EXCLUDED.last_name
-        RETURNING *
-        """
-        result = self.execute_query(query, (
-            user_data['user_id'],
-            user_data.get('username'),
-            user_data.get('first_name'),
-            user_data.get('last_name')
-        ))
-        return result
+        check_query = "SELECT * FROM users WHERE user_id = ?"
+        existing_user = self.execute_query(check_query, (user_data['user_id'],))
+        if existing_user:
+            update_query = """
+            UPDATE users 
+            SET username = ?, first_name = ?, last_name = ?, registered_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+            """
+            self.execute_query(update_query, (
+                user_data.get('username'),
+                user_data.get('first_name'),
+                user_data.get('last_name'),
+                user_data['user_id']
+            ), fetch=False)
+            return self.execute_query(check_query, (user_data['user_id'],))[0]
+        else:
+            insert_query = """
+            INSERT INTO users (user_id, username, first_name, last_name, registered_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """
+            self.execute_query(insert_query, (
+                user_data['user_id'],
+                user_data.get('username'),
+                user_data.get('first_name'),
+                user_data.get('last_name')
+            ), fetch=False)
+            return self.execute_query(check_query, (user_data['user_id'],))[0]
 
     def get_types_of_specialties(self) -> List[Dict]:
         query = "SELECT * FROM types_of_specialties ORDER BY name"
@@ -168,8 +177,8 @@ class Database:
         query = """
         SELECT s.*, t.name as type_name
         FROM specialties s
-        LEFT JOIN types_of_specialties t ON s.TOS_id = t.TOS_id
-        WHERE s.TOS_id = %s
+        LEFT JOIN types_of_specialties t ON s.tos_id = t.tos_id
+        WHERE s.tos_id = ?
         ORDER BY s.code
         """
         return self.execute_query(query, (type_id,))
@@ -186,7 +195,6 @@ class Database:
         return self.execute_query(query)
 
     def get_dormitory_addresses(self) -> List[Dict]:
-        """Получить все адреса общежитий с номерами телефонов"""
         query = """
         SELECT address_id, address, phone_number 
         FROM dormitory_addresses 
@@ -216,7 +224,7 @@ class Database:
         query = """
         SELECT * FROM important_dates 
         ORDER BY date_value
-        LIMIT %s
+        LIMIT ?
         """
         return self.execute_query(query, (limit,))
 
@@ -230,7 +238,7 @@ class Database:
             SELECT l.*, lt.name as type_name
             FROM links l
             LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-            WHERE lt.name = %s
+            WHERE lt.name = ?
             ORDER BY l.name
             """
             return self.execute_query(query, (type_name,))
@@ -248,13 +256,13 @@ class Database:
         SELECT l.*, lt.name as type_name
         FROM links l
         LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        WHERE l.link_type_id = %s
+        WHERE l.link_type_id = ?
         ORDER BY l.name
         """
         return self.execute_query(query, (type_id,))
 
     def get_link_type_by_name(self, type_name: str) -> Optional[Dict]:
-        query = "SELECT * FROM link_types WHERE name = %s"
+        query = "SELECT * FROM link_types WHERE name = ?"
         result = self.execute_query(query, (type_name,))
         return result[0] if result else None
 
@@ -267,7 +275,7 @@ class Database:
             SELECT l.*, lt.name as type_name
             FROM links l
             LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-            WHERE lt.name = %s
+            WHERE lt.name = ?
             ORDER BY l.name
             """
             return self.execute_query(query, (link_type,))
@@ -285,14 +293,12 @@ class Database:
         return self.execute_query(query)
 
     def get_venues(self) -> List[Dict]:
-        """Получить список площадок"""
         query = "SELECT venue_id, name FROM venues ORDER BY name"
         return self.execute_query(query)
 
     def get_sports_activities(self) -> List[Dict]:
-        """Получить список спортивных активностей"""
         query = """
-        SELECT sa.SA_id, sa.name, sa.venue_id, v.name as venue_name 
+        SELECT sa.sa_id, sa.name, sa.venue_id, v.name as venue_name 
         FROM sports_activities sa
         LEFT JOIN venues v ON sa.venue_id = v.venue_id
         ORDER BY sa.name
@@ -300,7 +306,6 @@ class Database:
         return self.execute_query(query)
 
     def get_activities_by_venue(self) -> Dict[str, List[Dict]]:
-        """Получить активности сгруппированные по площадкам"""
         activities = self.get_sports_activities()
         grouped = {}
 
@@ -309,13 +314,15 @@ class Database:
             if venue_name not in grouped:
                 grouped[venue_name] = []
             grouped[venue_name].append(activity)
-
         return grouped
 
+    def close(self):
+        if self.connection:
+            self.connection.close()
+            logger.info("Соединение с базой данных закрыто")
 
 class Form(StatesGroup):
     pass
-
 
 class AdmissionsBot:
     def __init__(self, token: str, db: Database, admin_ids: List[int], config: Config):
@@ -367,7 +374,6 @@ class AdmissionsBot:
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
         ])
         await message.answer(stats_text, parse_mode="Markdown", reply_markup=keyboard)
-
     async def show_main_menu(self, message: Message = None, callback_query: CallbackQuery = None):
         text = """
 *Добро пожаловать в бот приемной комиссии!*
@@ -413,7 +419,7 @@ class AdmissionsBot:
             text = "*Выберите тип специальности:*"
             builder = InlineKeyboardBuilder()
             for type_spec in specialties_types:
-                tos_id = type_spec.get('TOS_id') or type_spec.get('tos_id')
+                tos_id = type_spec.get('tos_id')
                 if tos_id is None:
                     for key, value in type_spec.items():
                         if isinstance(value, int):
@@ -432,7 +438,7 @@ class AdmissionsBot:
         spec_types = self.db.get_types_of_specialties()
         spec_type = None
         for t in spec_types:
-            current_id = t.get('TOS_id') or t.get('tos_id')
+            current_id = t.get('tos_id')
             if current_id == type_id:
                 spec_type = t
                 break
@@ -496,11 +502,9 @@ class AdmissionsBot:
                             price_str = f"{int(price):,}".replace(',', ' ')
                         else:
                             price_str = f"{price:,.2f}".replace(',', ' ').replace('.00', '')
-
                         text += f"- *Стоимость за год обучения:* {price_str} руб.\n"
                     except (ValueError, TypeError):
-                        price_str = str(spec['price_per_year']).replace('*', '\\*').replace('_', '\\_').replace('`',
-                                                                                                                '\\`')
+                        price_str = str(spec['price_per_year']).replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
                         text += f"- *Стоимость за год обучения:* {price_str} руб.\n"
                 text += "\n"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -530,14 +534,11 @@ class AdmissionsBot:
                     price_str = str(price['price_per_month']).replace('*', '\\*').replace('_', '\\_').replace('`',
                                                                                                               '\\`')
                     text += f"- {price_str} руб./месяц\n\n"
-
-        # Отображение адресов общежитий с номерами телефонов
         if dormitory_addresses:
             text += "\n*Адреса общежитий:*\n\n"
             for address_info in dormitory_addresses:
                 address = address_info['address'].replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
                 phone_number = address_info.get('phone_number', '')
-
                 text += f"- *{address}*\n"
                 if phone_number:
                     phone_escaped = phone_number.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
@@ -545,14 +546,11 @@ class AdmissionsBot:
                 else:
                     text += f"  — Телефон: не указан\n"
                 text += "\n"
-
-        # Отображение воспитателей по адресам
         if educators_by_address:
             text += "\n*Контактная информация воспитателей:*\n\n"
             for address, educators in educators_by_address.items():
                 addr_escaped = address.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`')
                 text += f"- *{addr_escaped}*\n"
-
                 educators_by_position = {}
                 for educator in educators:
                     position = educator.get('position_name', ' ')
@@ -560,7 +558,6 @@ class AdmissionsBot:
                     if position_escaped not in educators_by_position:
                         educators_by_position[position_escaped] = []
                     educators_by_position[position_escaped].append(educator)
-
                 for position, pos_educators in educators_by_position.items():
                     text += f"  — *{position}*\n"
                     for educator in pos_educators:
@@ -574,10 +571,8 @@ class AdmissionsBot:
                     text += "\n"
                 text += "\n"
 
-        # Если нет данных ни об адресах, ни о воспитателях, ни о ценах
         if not dormitory_prices and not dormitory_addresses and not educators_by_address:
             text += "Информация об общежитии временно недоступна."
-
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
         ])
@@ -586,7 +581,6 @@ class AdmissionsBot:
     async def show_activities_menu(self, callback_query: CallbackQuery):
         """Показать меню внеурочных активностей"""
         activities_by_venue = self.db.get_activities_by_venue()
-
         if not activities_by_venue:
             text = "*Внеурочные активности*\n\nНа данный момент информация о внеурочных активностях недоступна."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -691,7 +685,7 @@ class AdmissionsBot:
                     if isinstance(date_value, str):
                         date_str = date_value
                     else:
-                        date_str = date_value.strftime("%d.%m.%Y")
+                        date_str = datetime.strptime(date_value, '%Y-%m-%d').strftime("%d.%m.%Y")
                 else:
                     date_str = "Дата не указана"
                 text += f"- *{date_item['title']}*\n"
@@ -815,10 +809,8 @@ class AdmissionsBot:
                 links = self.db.get_all_links()
                 activities = self.db.get_sports_activities()
                 venues = self.db.get_venues()
-
                 total_educators = sum(len(edu_list) for edu_list in educators.values()) if educators else 0
                 total_addresses = len(educators) if educators else 0
-
                 stats_text = f"""
 *Статистика бота:*
 
@@ -863,19 +855,13 @@ class AdmissionsBot:
             specs_count = specialties[0]['count'] if specialties else 0
             print("\n" + "=" * 30)
             print("Бот успешно запущен!")
-            print(f"Специальностей в базе: {specs_count}")
-            print(f"Типов специальностей: {len(types)}")
-            print(f"Ссылок в базе: {len(links)}")
-            print(f"Площадок в базе: {len(venues)}")
-            print(f"Активностей в базе: {len(activities)}")
             print("=" * 30 + "\n")
         except Exception as e:
             logger.error(f"❌ Ошибка проверки БД: {e}")
             print(f"\n❌ Ошибка подключения к БД: {e}")
-            print("Проверьте настройки подключения!")
+            print("Проверьте наличие файла db_name.db в текущей директории!")
             return
         await self.dp.start_polling(self.bot)
-
 
 def main():
     print("=" * 30)
@@ -890,14 +876,15 @@ def main():
     except Exception as e:
         print(f"\nОШИБКА ПРИ ЗАПУСКЕ: {e}")
         print("\nВозможные причины:")
-        print("1. PostgreSQL не запущен")
-        print("2. Неправильные параметры подключения к БД")
-        print("3. База данных не создана")
+        print("1. Отсутствует файл базы данных admissions_bot.db")
+        print("2. Неправильный путь к файлу БД")
+        print("3. Файл БД поврежден")
         print("\nУбедитесь что:")
-        print("- PostgreSQL запущен")
-        print("- База данных 'admissions_bot' существует")
-        print("- Пользователь 'bot_user' существует с паролем 'bot_password'")
-
+        print("- Файл admissions_bot.db существует в текущей директории")
+        print("- У вас есть права на чтение/запись этого файла")
+    finally:
+        if 'db' in locals():
+            db.close()
 
 if __name__ == "__main__":
     main()
