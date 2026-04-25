@@ -1,0 +1,127 @@
+PRAGMA foreign_keys = ON;
+
+# Таблица контактов
+CREATE TABLE contacts (
+    contacts_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone VARCHAR(50),
+    email VARCHAR(100),
+    website VARCHAR(255),
+    working_hours TEXT,
+    address TEXT,
+    priority INTEGER
+);
+
+# Таблица докуметов
+CREATE TABLE documents (
+    document_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    is_required BOOLEAN DEFAULT 1,
+    priority INTEGER DEFAULT 10
+);
+
+# Таблица общежитий
+CREATE TABLE dormitory (
+    type_places VARCHAR(200) PRIMARY KEY,
+    price_per_month NUMERIC(10,2)
+);
+
+# Таблица адресов общежитий
+CREATE TABLE dormitory_addresses (
+    address_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    address TEXT NOT NULL UNIQUE,
+    phone_number VARCHAR(50)
+);
+
+# Таблица должностей
+CREATE TABLE positions (
+    position_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(200) NOT NULL UNIQUE
+);
+
+# Таблица воспитателей
+CREATE TABLE educators (
+    educator_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    full_name VARCHAR(255) NOT NULL,
+    phone VARCHAR(50),
+    position_id INTEGER,
+    address_id INTEGER,
+    FOREIGN KEY (position_id) REFERENCES positions(position_id) ON DELETE SET NULL,
+    FOREIGN KEY (address_id) REFERENCES dormitory_addresses(address_id) ON DELETE SET NULL
+);
+
+# Таблица важных дат и мероприятий
+CREATE TABLE important_dates (
+    date_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title VARCHAR(200) NOT NULL,
+    date_value DATE NOT NULL,
+    description TEXT,
+    date_type VARCHAR(50)
+);
+
+# Таблица типов ссылок
+CREATE TABLE link_types (
+    link_type_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(100) NOT NULL UNIQUE
+);
+
+# Таблица ссылок
+CREATE TABLE links (
+    link_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    link_type_id INTEGER,
+    FOREIGN KEY (link_type_id) REFERENCES link_types(link_type_id) ON DELETE CASCADE
+);
+
+# Таблица типов специальностей
+CREATE TABLE types_of_specialties (
+    tos_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(255) NOT NULL
+);
+
+# Таблица специальностей
+CREATE TABLE specialties (
+    specialty_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tos_id INTEGER,
+    code VARCHAR(20) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    duration_years INTEGER,
+    budget_places INTEGER,
+    paid_places INTEGER,
+    price_per_year NUMERIC(10,2),
+    FOREIGN KEY (tos_id) REFERENCES types_of_specialties(tos_id)
+);
+
+# Таблица мест для внеурочных активностей
+CREATE TABLE venues (
+    venue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(255)
+);
+
+# Таблица внеурочных активностей
+CREATE TABLE sports_activities (
+    sa_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(255),
+    venue_id INTEGER,
+    FOREIGN KEY (venue_id) REFERENCES venues(venue_id)
+);
+
+# Таблица пользователей
+CREATE TABLE users (
+    user_id INTEGER PRIMARY KEY,
+    username VARCHAR(100),
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+# Создание индексов
+CREATE INDEX idx_educators_position_id ON educators(position_id);
+CREATE INDEX idx_educators_address_id ON educators(address_id);
+CREATE INDEX idx_links_link_type_id ON links(link_type_id);
+CREATE INDEX idx_specialties_tos_id ON specialties(tos_id);
+CREATE INDEX idx_sports_activities_venue_id ON sports_activities(venue_id);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_important_dates_date_value ON important_dates(date_value);
