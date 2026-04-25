@@ -1,0 +1,664 @@
+import asyncio
+import logging
+import sys
+import sqlite3
+from typing import Dict, List, Optional
+from datetime import datetime
+
+from maxapi import Bot, Dispatcher
+from maxapi.types import BotStarted, Command, MessageCreated, CallbackQuery
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('bot.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class Config:
+    def __init__(self):
+        self.db_path = 'db_name.db'
+        self.bot_token = 'token max'
+        self.admin_ids = [ID max]
+        self.bell_schedule = """
+🕐 *Расписание звонков:*
+
+*Понедельник:*
+
+*Классный час:* 8:15 - 9:00
+*Завтрак:* 9:00 - 9:20
+*1 пара* (1-2 уроки):
+              • 09:20 - 10:05
+              • 10:15 - 11:00
+*2 пара* (3-4 уроки):
+              • 11:10 - 11:55
+*Обед:* 11:55 - 12:35
+              • 12:35 - 13:20
+*3 пара* (5-6 уроки):
+              • 13:30 - 14:15
+              • 14:25 - 15:10
+*Полдник:* 15:10 - 15:30
+*4 пара* (7-8 уроки):
+              • 15:30 - 16:15
+              • 16:25 - 17:10
+*5 пара* (9-10 уроки):
+              • 17:20 - 18:05
+              • 18:15 - 19:00
+
+*Вторник - Пятница:*
+
+*Десятиминутка для классных руководителей:* 8:00 - 8:10
+*1 пара* (1-2 уроки):
+              • 08:10 - 8:55
+*Завтрак:* 8:55 - 9:15
+              • 9:15 - 10:00
+*2 пара* (3-4 уроки):
+              • 10:10 - 10:55
+              • 11:05 - 11:50
+*Обед:* 11:50 - 12:30
+*3 пара* (5-6 уроки):
+              • 12:30 - 13:15
+              • 13:25 - 14:10
+*4 пара* (7-8 уроки):
+              • 14:20 - 15:05
+*Полдник:* 15:05 - 15:25
+              • 15:25 - 16:10
+*5 пара* (9-10 уроки):
+              • 16:20 - 17:05
+              • 17:15 - 18:00
+
+*Суббота:*
+
+*1 пара:* 08:10 - 9:10
+*2 пара:* 9:20 - 10:20
+*3 пара:* 10:30 - 11:30
+*4 пара:* 11:40 - 12:40
+*5 пара:* 12:50 - 13:50
+*6 пара:* 14:00 - 15:00
+
+*Учебная практика:*
+
+*1 смена:* 8:00 - 11:00
+*2 смена:* 11:15 - 14:15
+        """
+
+
+class Database:
+    def __init__(self, config: Config):
+        self.config = config
+        self.connection = None
+        self.connect()
+
+    def connect(self):
+        try:
+            self.connection = sqlite3.connect(self.config.db_path)
+            self.connection.row_factory = sqlite3.Row
+            self.connection.execute("PRAGMA foreign_keys = ON")
+            logger.info(f"Успешное подключение к БД: {self.config.db_path}")
+        except Exception as e:
+            logger.error(f"Ошибка подключения к БД: {e}")
+            raise
+
+    def execute_query(self, query: str, params: tuple = None, fetch: bool = True):
+        try:
+            if self.connection is None:
+                self.connect()
+            cursor = self.connection.cursor()
+            cursor.execute(query, params or ())
+            if fetch:
+                if query.strip().upper().startswith('SELECT'):
+                    result = cursor.fetchall()
+                    return [dict(row) for row in result] if result else []
+                elif query.strip().upper().startswith('INSERT'):
+                    self.connection.commit()
+                    return {'lastrowid': cursor.lastrowid} if cursor.lastrowid else None
+                else:
+                    self.connection.commit()
+                    return {'rowcount': cursor.rowcount} if cursor.rowcount > 0 else None
+            else:
+                self.connection.commit()
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка выполнения запроса: {e}")
+            if self.connection:
+                self.connection.rollback()
+            raise
+
+    def get_or_create_user(self, user_data: Dict) -> Dict:
+        check_query = "SELECT * FROM users WHERE user_id = ?"
+        existing_user = self.execute_query(check_query, (user_data['user_id'],))
+
+        if existing_user:
+            update_query = """
+            UPDATE users 
+            SET username = ?, first_name = ?, last_name = ?, registered_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+            """
+            self.execute_query(update_query, (
+                user_data.get('username'),
+                user_data.get('first_name'),
+                user_data.get('last_name'),
+                user_data['user_id']
+            ), fetch=False)
+            return self.execute_query(check_query, (user_data['user_id'],))[0]
+        else:
+            insert_query = """
+            INSERT INTO users (user_id, username, first_name, last_name, registered_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """
+            self.execute_query(insert_query, (
+                user_data['user_id'],
+                user_data.get('username'),
+                user_data.get('first_name'),
+                user_data.get('last_name')
+            ), fetch=False)
+            return self.execute_query(check_query, (user_data['user_id'],))[0]
+
+    def get_types_of_specialties(self) -> List[Dict]:
+        query = "SELECT * FROM types_of_specialties ORDER BY name"
+        return self.execute_query(query)
+
+    def get_specialties_by_type(self, type_id: int) -> List[Dict]:
+        query = """
+        SELECT s.*, t.name as type_name
+        FROM specialties s
+        LEFT JOIN types_of_specialties t ON s.tos_id = t.tos_id
+        WHERE s.tos_id = ?
+        ORDER BY s.code
+        """
+        return self.execute_query(query, (type_id,))
+
+    def get_documents(self) -> List[Dict]:
+        query = "SELECT * FROM documents ORDER BY priority, name"
+        return self.execute_query(query)
+
+    def get_dormitory_prices(self) -> List[Dict]:
+        query = "SELECT * FROM dormitory ORDER BY price_per_month"
+        return self.execute_query(query)
+
+    def get_dormitory_addresses(self) -> List[Dict]:
+        query = "SELECT address_id, address, phone_number FROM dormitory_addresses ORDER BY address"
+        return self.execute_query(query)
+
+    def get_educators_by_address(self) -> Dict[str, List[Dict]]:
+        query = """
+        SELECT e.*, p.name as position_name, da.address as dormitory_address, da.phone_number as dormitory_phone
+        FROM educators e
+        LEFT JOIN positions p ON e.position_id = p.position_id
+        LEFT JOIN dormitory_addresses da ON e.address_id = da.address_id
+        WHERE da.address IS NOT NULL
+        ORDER BY da.address, p.name, e.full_name
+        """
+        educators = self.execute_query(query)
+        grouped = {}
+        for educator in educators:
+            if educator:
+                address = educator.get('dormitory_address')
+                if address is None:
+                    address = 'Не указан адрес'
+                if address not in grouped:
+                    grouped[address] = []
+                grouped[address].append(educator)
+        return grouped
+
+    def get_important_dates(self, limit: int = 20) -> List[Dict]:
+        query = "SELECT * FROM important_dates ORDER BY date_value LIMIT ?"
+        return self.execute_query(query, (limit,))
+
+    def get_contacts(self) -> List[Dict]:
+        query = "SELECT * FROM contacts ORDER BY priority"
+        return self.execute_query(query)
+
+    def get_link_type_by_name(self, type_name: str) -> Optional[Dict]:
+        query = "SELECT * FROM link_types WHERE name = ?"
+        result = self.execute_query(query, (type_name,))
+        return result[0] if result else None
+
+    def get_links_by_type_id(self, type_id: int) -> List[Dict]:
+        query = """
+        SELECT l.*, lt.name as type_name
+        FROM links l
+        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
+        WHERE l.link_type_id = ?
+        ORDER BY l.name
+        """
+        return self.execute_query(query, (type_id,))
+
+    def get_all_links(self) -> List[Dict]:
+        query = """
+        SELECT l.*, lt.name as type_name
+        FROM links l
+        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
+        ORDER BY lt.name, l.name
+        """
+        return self.execute_query(query)
+
+    def get_sports_activities(self) -> List[Dict]:
+        query = """
+        SELECT sa.sa_id, sa.name, sa.venue_id, v.name as venue_name 
+        FROM sports_activities sa
+        LEFT JOIN venues v ON sa.venue_id = v.venue_id
+        ORDER BY sa.name
+        """
+        return self.execute_query(query)
+
+    def get_venues(self) -> List[Dict]:
+        query = "SELECT venue_id, name FROM venues ORDER BY name"
+        return self.execute_query(query)
+
+    def get_activities_by_venue(self) -> Dict[str, List[Dict]]:
+        activities = self.get_sports_activities()
+        grouped = {}
+        for activity in activities:
+            venue_name = activity.get('venue_name', 'Без площадки')
+            if venue_name not in grouped:
+                grouped[venue_name] = []
+            grouped[venue_name].append(activity)
+        return grouped
+
+    def close(self):
+        if self.connection:
+            self.connection.close()
+            logger.info("Соединение с БД закрыто")
+
+class AdmissionsBot:
+    def __init__(self, token: str, db: Database, admin_ids: List[int], config: Config):
+        self.bot = Bot(token=token)
+        self.db = db
+        self.admin_ids = admin_ids
+        self.config = config
+        self.dp = Dispatcher()
+        self.register_handlers()
+
+    def register_handlers(self):
+        @self.dp.bot_started()
+        async def on_bot_started(event: BotStarted):
+            await self.handle_bot_started(event)
+        @self.dp.message_created(Command('start'))
+        async def on_start(event: MessageCreated):
+            await self.handle_start(event)
+        @self.dp.message_created(Command('admin'))
+        async def on_admin(event: MessageCreated):
+            await self.handle_admin(event)
+        @self.dp.callback_query()
+        async def on_callback(event: CallbackQuery):
+            await self.handle_callback(event)
+
+    async def handle_bot_started(self, event: BotStarted):
+        await event.bot.send_message(
+            chat_id=event.chat_id,
+            text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы."
+        )
+
+    async def handle_start(self, event: MessageCreated):
+        """Обработчик команды /start"""
+        user_data = {
+            'user_id': event.message.from_user.id,
+            'username': event.message.from_user.username,
+            'first_name': event.message.from_user.first_name,
+            'last_name': event.message.from_user.last_name
+        }
+        self.db.get_or_create_user(user_data)
+        await self.show_main_menu(event)
+
+    async def handle_admin(self, event: MessageCreated):
+        """Обработчик команды /admin"""
+        if event.message.from_user.id not in self.admin_ids:
+            await event.message.answer("⛔ У вас нет прав администратора.")
+            return
+        
+        users_result = self.db.execute_query("SELECT COUNT(*) as count FROM users")
+        specs_result = self.db.execute_query("SELECT COUNT(*) as count FROM specialties")
+        contacts_result = self.db.execute_query("SELECT COUNT(*) as count FROM contacts")
+        users_count = users_result[0]['count'] if users_result else 0
+        specs_count = specs_result[0]['count'] if specs_result else 0
+        contacts_count = contacts_result[0]['count'] if contacts_result else 0
+        stats_text = f"""
+👑 *Панель администратора*
+
+📊 Статистика:
+👥 Пользователей: {users_count}
+🎓 Специальностей: {specs_count}
+📞 Контактов: {contacts_count}
+        """
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📊 Подробная статистика", "callback_data": "admin_stats"}],
+                [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
+            ]
+        }
+        await event.message.answer(stats_text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_main_menu(self, event: MessageCreated = None, callback_query: CallbackQuery = None):
+        text = """
+*Добро пожаловать в бот приемной комиссии!*
+
+Здесь вы найдете всю необходимую информацию.
+
+*Выберите нужный раздел:*
+        """
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "🎓 Специальности", "callback_data": "menu_specialties"},
+                    {"text": "🏠 Общежитие", "callback_data": "menu_dormitory"}
+                ],
+                [
+                    {"text": "🕐 Расписание", "callback_data": "menu_schedule"},
+                    {"text": "📞 Контакты", "callback_data": "menu_contacts"}
+                ],
+                [{"text": "📅 Важные даты", "callback_data": "menu_dates"}],
+                [{"text": "📜 Правила и уставы", "callback_data": "menu_rules"}],
+                [{"text": "❓ Абитуриентам", "callback_data": "menu_become_student"}],
+                [{"text": "⚽ Внеурочные активности", "callback_data": "menu_activities"}]
+            ]
+        }
+        if callback_query:
+            await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+        else:
+            await event.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_specialties_menu(self, callback_query: CallbackQuery):
+        specialties_types = self.db.get_types_of_specialties()
+        if not specialties_types:
+            text = "Типы специальностей временно недоступны."
+            keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        else:
+            text = "*Выберите тип специальности:*"
+            buttons = []
+            for type_spec in specialties_types:
+                tos_id = type_spec.get('tos_id')
+                buttons.append([{"text": type_spec['name'], "callback_data": f"type_{tos_id}"}])
+            buttons.append([{"text": "🔙 Назад", "callback_data": "main_menu"}])
+            keyboard = {"inline_keyboard": buttons}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_specialties_by_type(self, callback_query: CallbackQuery, type_id: int):
+        specialties = self.db.get_specialties_by_type(type_id)
+        spec_types = self.db.get_types_of_specialties()
+        spec_type = next((t for t in spec_types if t.get('tos_id') == type_id), None)
+        if not specialties:
+            type_name = spec_type['name'] if spec_type else "Тип"
+            type_name_escaped = self.escape_markdown(type_name)
+            text = f"📚 *{type_name_escaped}*\n\nСпециальности временно недоступны."
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🔙 Назад к типам", "callback_data": "menu_specialties"}],
+                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
+                ]
+            }
+        else:
+            type_name = spec_type['name'] if spec_type else "Специальности"
+            type_name_escaped = self.escape_markdown(type_name)
+            text = f"- *{type_name_escaped}*\n\n"
+            for spec in specialties:
+                spec_name = self.escape_markdown(spec['name'])
+                text += f"*{spec['code']} - {spec_name}*\n"
+                description = spec.get('description', '')
+                if description:
+                    text += f"- {self.escape_markdown(description)}\n"
+                if spec.get('duration_years'):
+                    months = int(spec['duration_years'])
+                    years = months // 12
+                    remaining_months = months % 12
+                    if years > 0:
+                        text += f"- *Срок обучения:* {years} год"
+                        if remaining_months > 0:
+                            text += f" {remaining_months} мес"
+                        text += "\n"
+                    elif remaining_months > 0:
+                        text += f"- *Срок обучения:* {remaining_months} мес\n"
+                if spec.get('budget_places'):
+                    text += f"- *Бюджетных мест:* {spec['budget_places']}\n"
+                if spec.get('paid_places'):
+                    text += f"- *Платных мест:* {spec['paid_places']}\n"
+                if spec.get('price_per_year'):
+                    text += f"- *Стоимость за год обучения:* {spec['price_per_year']} руб.\n"
+                text += "\n"
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🔙 Назад к типам", "callback_data": "menu_specialties"}],
+                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
+                ]
+            }
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_dormitory_menu(self, callback_query: CallbackQuery):
+        dormitory_prices = self.db.get_dormitory_prices()
+        educators_by_address = self.db.get_educators_by_address()
+        dormitory_addresses = self.db.get_dormitory_addresses()
+        text = "*Информация об общежитии:*\n\n"
+        if dormitory_prices:
+            text += "Для иногородних студентов мы предоставляем место в общежитии.\n\n*Стоимость проживания:*\n\n"
+            for price in dormitory_prices:
+                type_places = price.get('type_places', 'Не указано')
+                text += f"*{self.escape_markdown(type_places)}*\n"
+                price_val = price.get('price_per_month', 0)
+                if price_val:
+                    text += f"- {price_val} руб./месяц\n\n"
+                else:
+                    text += f"- Цена не указана\n\n"
+        if dormitory_addresses:
+            text += "\n*Адреса общежитий:*\n\n"
+            for address_info in dormitory_addresses:
+                address = address_info.get('address', 'Адрес не указан')
+                phone_number = address_info.get('phone_number', '')
+                text += f"- *{self.escape_markdown(address)}*\n"
+                if phone_number:
+                    text += f"  — Телефон: {phone_number}\n"
+                text += "\n"
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_schedule_menu(self, callback_query: CallbackQuery):
+        """Показать расписание"""
+        text = self.config.bell_schedule
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_contacts_menu(self, callback_query: CallbackQuery):
+        contacts = self.db.get_contacts()
+        text = "*Контактная информация:*\n\n"
+        if contacts:
+            for i, contact in enumerate(contacts, 1):
+                text += f"*Филиал {i}:*\n"
+                if contact.get('phone'):
+                    text += f"- *Телефон:* {contact['phone']}\n"
+                if contact.get('email'):
+                    text += f"- *Email:* {contact['email']}\n"
+                if contact.get('address'):
+                    text += f"- *Адрес:* {self.escape_markdown(contact['address'])}\n"
+                if contact.get('working_hours'):
+                    text += f"- *Часы работы:*\n{contact['working_hours']}\n"
+                text += "\n"
+        else:
+            text += "Контакты временно недоступны.\n"
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_dates_menu(self, callback_query: CallbackQuery):
+        dates = self.db.get_important_dates()
+        if not dates:
+            text = "На данный момент нет актуальных дат."
+        else:
+            text = "*Важные даты:*\n\n"
+            for date_item in dates:
+                date_value = date_item.get('date_value')
+                if date_value:
+                    date_str = date_value if isinstance(date_value, str) else datetime.strptime(date_value, '%Y-%m-%d').strftime("%d.%m.%Y")
+                else:
+                    date_str = "Дата не указана"
+                text += f"- *{date_item['title']}*\n"
+                text += f"Запланированно на {date_str}\n"
+                if date_item.get('description'):
+                    text += f"Ссылка: {date_item['description']}\n"
+                text += "\n"
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_rules_menu(self, callback_query: CallbackQuery):
+        text = "*Тут представлены ссылки на правила и уставы:*"
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_become_student_menu(self, callback_query: CallbackQuery):
+        documents = self.db.get_documents()
+        contacts = self.db.get_contacts()
+        text = "*Как стать студентом?*\n"
+        
+        if documents:
+            text += "\n*Необходимые документы:*\n"
+            for doc in documents:
+                doc_name = self.escape_markdown(doc['name'])
+                text += f"*{doc_name}*\n"
+                if doc.get('description'):
+                    text += f"ℹ️ {self.escape_markdown(doc['description'])}\n"
+                is_required = doc.get('is_required', True)
+                required_text = "Обязательный" if is_required else "Дополнительный"
+                text += f"   - {required_text}\n\n"
+        if contacts:
+            text += "\n*Для подачи документов обращайтесь:*\n"
+            for contact in contacts:
+                if contact.get('address'):
+                    text += f"- {self.escape_markdown(contact['address'])}\n"
+                if contact.get('phone'):
+                    text += f"- {contact['phone']}\n"
+                if contact.get('working_hours'):
+                    text += f"- {contact['working_hours']}\n\n"
+        text += "\n*До встречи, будущий студент!*"
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    async def show_activities_menu(self, callback_query: CallbackQuery):
+        activities_by_venue = self.db.get_activities_by_venue()
+        if not activities_by_venue:
+            text = "*Внеурочные активности*\n\nНа данный момент информация о внеурочных активностях недоступна."
+        else:
+            text = "*Внеурочные активности для студентов:*\n\n"
+            for venue_name, activities in activities_by_venue.items():
+                venue_name_escaped = self.escape_markdown(venue_name)
+                text += f"*- {venue_name_escaped}*\n"
+                if activities:
+                    for activity in activities:
+                        activity_name = self.escape_markdown(activity['name'])
+                        text += f"  • {activity_name}\n"
+                else:
+                    text += "  • На этой площадке пока нет активностей\n"
+                text += "\n"
+        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+    def escape_markdown(self, text: str) -> str:
+        if not text:
+            return ""
+        escape_chars = ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in escape_chars:
+            text = text.replace(char, f'\\{char}')
+        return text
+
+    async def handle_callback(self, event: CallbackQuery):
+        data = event.data
+        try:
+            if data == "main_menu":
+                # Создаем фиктивный MessageCreated для show_main_menu
+                await self.show_main_menu(callback_query=event)
+            elif data == "menu_specialties":
+                await self.show_specialties_menu(event)
+            elif data == "menu_dormitory":
+                await self.show_dormitory_menu(event)
+            elif data == "menu_schedule":
+                await self.show_schedule_menu(event)
+            elif data == "menu_contacts":
+                await self.show_contacts_menu(event)
+            elif data == "menu_dates":
+                await self.show_dates_menu(event)
+            elif data == "menu_rules":
+                await self.show_rules_menu(event)
+            elif data == "menu_become_student":
+                await self.show_become_student_menu(event)
+            elif data == "menu_activities":
+                await self.show_activities_menu(event)
+            elif data.startswith("type_"):
+                type_id = int(data.split("_")[1])
+                await self.show_specialties_by_type(event, type_id)
+            elif data == "admin_stats":
+                if event.from_user.id not in self.admin_ids:
+                    await event.message.edit_text("⛔ У вас нет прав администратора.")
+                    return
+                users = self.db.execute_query("SELECT * FROM users")
+                specialties = self.db.execute_query("SELECT * FROM specialties")
+                dates = self.db.execute_query("SELECT * FROM important_dates")
+                documents = self.db.execute_query("SELECT * FROM documents")
+                contacts = self.db.execute_query("SELECT * FROM contacts")
+                types = self.db.get_types_of_specialties()
+                stats_text = f"""
+*Статистика бота:*
+
+👥 Пользователей: {len(users)}
+🎓 Специальностей: {len(specialties)}
+📅 Важных дат: {len(dates)}
+📄 Документов: {len(documents)}
+📞 Контактов: {len(contacts)}
+📚 Типов специальностей: {len(types)}
+                """
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "🔙 Назад", "callback_data": "main_menu"}]
+                    ]
+                }
+                await event.message.edit_text(stats_text, parse_mode="Markdown", reply_markup=keyboard)
+            else:
+                await event.answer("Действие не распознано", show_alert=True)
+        except Exception as e:
+            logger.error(f"Ошибка обработки callback: {e}")
+            await event.message.edit_text(
+                "❌ Произошла ошибка. Попробуйте еще раз.",
+                reply_markup={"inline_keyboard": [[{"text": "🏠 Главное меню", "callback_data": "main_menu"}]]}
+            )
+        await event.answer()  # Подтверждаем получение callback
+
+    async def start(self):
+        """Запуск бота"""
+        logger.info("Запуск бота для Max...")
+        try:
+            specialties = self.db.execute_query("SELECT COUNT(*) as count FROM specialties")
+            types = self.db.get_types_of_specialties()
+            links = self.db.get_all_links()
+            specs_count = specialties[0]['count'] if specialties else 0
+            print("\n" + "=" * 30)
+            print("Бот для Max успешно запущен!")
+            print(f"Специальностей в базе: {specs_count}")
+            print(f"Типов специальностей: {len(types)}")
+            print(f"Ссылок в базе: {len(links)}")
+            print("=" * 30 + "\n")
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки БД: {e}")
+            print(f"\n❌ Ошибка подключения к БД: {e}")
+            return
+        await self.dp.start_polling(self.bot)
+
+def main():
+    print("=" * 30)
+    print("БОТ ПРИЕМНОЙ КОМИССИИ ДЛЯ MAX")
+    print("=" * 30)
+    config = Config()
+    try:
+        db = Database(config)
+        bot = AdmissionsBot(config.bot_token, db, config.admin_ids, config)
+        print("\nЗапускаю бота...")
+        asyncio.run(bot.start())
+    except Exception as e:
+        print(f"\nОШИБКА ПРИ ЗАПУСКЕ: {e}")
+        print("\nВозможные причины:")
+        print("1. Отсутствует файл базы данных admissions_bot.db")
+        print("2. Неправильный токен бота для Max")
+        print("3. Проблемы с подключением к Max API")
+    finally:
+        if 'db' in locals():
+            db.close()
+
+if __name__ == "__main__":
+    main()
