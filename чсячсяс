@@ -1,2172 +1,519 @@
 import asyncio
 import logging
-import sys
 import sqlite3
-from typing import Dict, List, Optional
+import os
 from datetime import datetime
-
 from maxapi import Bot, Dispatcher
-from maxapi.types import BotStarted, Command, MessageCreated, CallbackQuery
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log', encoding='utf-8')
-    ]
-)
+from maxapi.types import BotStarted, Command, MessageCreated
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Config:
     def __init__(self):
-        self.db_path = 'db_name.db'
-        self.bot_token = 'max bot token'
-        self.admin_ids = [ID max]
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        db_dir = os.path.join(base_dir, 'data')
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+        self.db_path = os.path.join(db_dir, '.db')
+        self.bot_token = ''
+        self.admin_ids = []
         self.bell_schedule = """
-🕐 *Расписание звонков:*
+🕐 РАСПИСАНИЕ ЗВОНКОВ
 
-*Понедельник:*
+ПОНЕДЕЛЬНИК:
+Классный час: 8:15 - 9:00
+Завтрак: 9:00 - 9:20
+1 пара: 09:20 - 10:05, 10:15 - 11:00
+2 пара: 11:10 - 11:55
+Обед: 11:55 - 12:35, 12:35 - 13:20
+3 пара: 13:30 - 14:15, 14:25 - 15:10
+Полдник: 15:10 - 15:30
+4 пара: 15:30 - 16:15, 16:25 - 17:10
+5 пара: 17:20 - 18:05, 18:15 - 19:00
 
-*Классный час:* 8:15 - 9:00
-*Завтрак:* 9:00 - 9:20
-*1 пара* (1-2 уроки):
-              • 09:20 - 10:05
-              • 10:15 - 11:00
-*2 пара* (3-4 уроки):
-              • 11:10 - 11:55
-*Обед:* 11:55 - 12:35
-              • 12:35 - 13:20
-*3 пара* (5-6 уроки):
-              • 13:30 - 14:15
-              • 14:25 - 15:10
-*Полдник:* 15:10 - 15:30
-*4 пара* (7-8 уроки):
-              • 15:30 - 16:15
-              • 16:25 - 17:10
-*5 пара* (9-10 уроки):
-              • 17:20 - 18:05
-              • 18:15 - 19:00
+ВТОРНИК - ПЯТНИЦА:
+Десятиминутка: 8:00 - 8:10
+1 пара: 08:10 - 8:55
+Завтрак: 8:55 - 9:15, 9:15 - 10:00
+2 пара: 10:10 - 10:55, 11:05 - 11:50
+Обед: 11:50 - 12:30
+3 пара: 12:30 - 13:15, 13:25 - 14:10
+4 пара: 14:20 - 15:05
+Полдник: 15:05 - 15:25, 15:25 - 16:10
+5 пара: 16:20 - 17:05, 17:15 - 18:00
 
-*Вторник - Пятница:*
+СУББОТА:
+1 пара: 08:10 - 9:10
+2 пара: 9:20 - 10:20
+3 пара: 10:30 - 11:30
+4 пара: 11:40 - 12:40
+5 пара: 12:50 - 13:50
+6 пара: 14:00 - 15:00
 
-*Десятиминутка для классных руководителей:* 8:00 - 8:10
-*1 пара* (1-2 уроки):
-              • 08:10 - 8:55
-*Завтрак:* 8:55 - 9:15
-              • 9:15 - 10:00
-*2 пара* (3-4 уроки):
-              • 10:10 - 10:55
-              • 11:05 - 11:50
-*Обед:* 11:50 - 12:30
-*3 пара* (5-6 уроки):
-              • 12:30 - 13:15
-              • 13:25 - 14:10
-*4 пара* (7-8 уроки):
-              • 14:20 - 15:05
-*Полдник:* 15:05 - 15:25
-              • 15:25 - 16:10
-*5 пара* (9-10 уроки):
-              • 16:20 - 17:05
-              • 17:15 - 18:00
-
-*Суббота:*
-
-*1 пара:* 08:10 - 9:10
-*2 пара:* 9:20 - 10:20
-*3 пара:* 10:30 - 11:30
-*4 пара:* 11:40 - 12:40
-*5 пара:* 12:50 - 13:50
-*6 пара:* 14:00 - 15:00
-
-*Учебная практика:*
-
-*1 смена:* 8:00 - 11:00
-*2 смена:* 11:15 - 14:15
-        """
+УЧЕБНАЯ ПРАКТИКА:
+1 смена: 8:00 - 11:00
+2 смена: 11:15 - 14:15"""
 
 class Database:
     def __init__(self, config: Config):
         self.config = config
-        self.connection = None
-        self.connect()
-        self.create_orders_table()
+        self.conn = sqlite3.connect(config.db_path)
+        self.conn.row_factory = sqlite3.Row
+    def get_or_create_user(self, user_id: int, first_name: str, last_name: str = ''):
+        cursor = self.conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            self.conn.execute(
+                'INSERT INTO users (user_id, first_name, last_name) VALUES (?, ?, ?)',
+                (user_id, first_name, last_name))
+            self.conn.commit()
+            logger.info(f"Создан пользователь {user_id}")
+        return user
+    def save_order(self, user_id: int, full_name: str, group: str, cert_type: str, message: str = None):
+        cursor = self.conn.execute(
+            'INSERT INTO certificate_orders (user_id, student_full_name, student_group, certificate_type, student_message, status, order_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (user_id, full_name, group, cert_type, message, 'new', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        self.conn.commit()
+        return cursor.lastrowid
+    def get_new_orders(self):
+        cursor = self.conn.execute('SELECT * FROM certificate_orders WHERE status = "new" ORDER BY order_date DESC')
+        return cursor.fetchall()
+    def get_types_of_specialties(self):
+        cursor = self.conn.execute('SELECT tos_id, name FROM types_of_specialties ORDER BY tos_id')
+        return cursor.fetchall()
+    def get_specialties_by_type(self, type_id: int):
+        cursor = self.conn.execute('''
+            SELECT spec_id, code, name, description, duration_years, budget_places, paid_places, price_per_year
+            FROM specialties 
+            WHERE tos_id = ?
+            ORDER BY code''', (type_id,))
+        return cursor.fetchall()
 
-    def connect(self):
-        try:
-            self.connection = sqlite3.connect(self.config.db_path)
-            self.connection.row_factory = sqlite3.Row
-            self.connection.execute("PRAGMA foreign_keys = ON")
-            logger.info(f"Успешное подключение к БД: {self.config.db_path}")
-        except Exception as e:
-            logger.error(f"Ошибка подключения к БД: {e}")
-            raise
-
-    def create_orders_table(self):
-        """Создать таблицу для заказов справок"""
-        query = """
-        CREATE TABLE IF NOT EXISTS certificate_orders (
-            order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            username TEXT,
-            full_name TEXT NOT NULL,
-            certificate_type TEXT NOT NULL,
-            status TEXT DEFAULT 'new',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMP,
-            admin_comment TEXT
-        )
-        """
-        self.execute_query(query, fetch=False)
-        logger.info("Таблица certificate_orders проверена/создана")
-
-    def execute_query(self, query: str, params: tuple = None, fetch: bool = True):
-        try:
-            if self.connection is None:
-                self.connect()
-            cursor = self.connection.cursor()
-            cursor.execute(query, params or ())
-            if fetch:
-                if query.strip().upper().startswith('SELECT'):
-                    result = cursor.fetchall()
-                    return [dict(row) for row in result] if result else []
-                elif query.strip().upper().startswith('INSERT'):
-                    self.connection.commit()
-                    return {'lastrowid': cursor.lastrowid} if cursor.lastrowid else None
-                else:
-                    self.connection.commit()
-                    return {'rowcount': cursor.rowcount} if cursor.rowcount > 0 else None
-            else:
-                self.connection.commit()
-                return None
-        except Exception as e:
-            logger.error(f"Ошибка выполнения запроса: {e}")
-            if self.connection:
-                self.connection.rollback()
-            raise
-
-    def get_or_create_user(self, user_data: Dict) -> Dict:
-        """Получить или создать пользователя с проверкой на дубликаты"""
-        check_query = "SELECT * FROM users WHERE user_id = ?"
-        existing_user = self.execute_query(check_query, (user_data['user_id'],))
-
-        if existing_user:
-            # Проверяем, изменились ли данные пользователя
-            current_user = existing_user[0]
-            needs_update = False
-            
-            # Сравниваем текущие данные с новыми
-            if current_user.get('username') != user_data.get('username'):
-                needs_update = True
-            if current_user.get('first_name') != user_data.get('first_name'):
-                needs_update = True
-            if current_user.get('last_name') != user_data.get('last_name'):
-                needs_update = True
-            
-            # Обновляем только если данные изменились
-            if needs_update:
-                update_query = """
-                UPDATE users 
-                SET username = ?, first_name = ?, last_name = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ?
-                """
-                self.execute_query(update_query, (
-                    user_data.get('username'),
-                    user_data.get('first_name'),
-                    user_data.get('last_name'),
-                    user_data['user_id']
-                ), fetch=False)
-                logger.info(f"Данные пользователя {user_data['user_id']} обновлены")
-            else:
-                logger.info(f"Пользователь {user_data['user_id']} уже существует, данные актуальны")
-            
-            return self.execute_query(check_query, (user_data['user_id'],))[0]
-        else:
-            # Создаем нового пользователя
-            insert_query = """
-            INSERT INTO users (user_id, username, first_name, last_name, registered_at, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            self.execute_query(insert_query, (
-                user_data['user_id'],
-                user_data.get('username'),
-                user_data.get('first_name'),
-                user_data.get('last_name')
-            ), fetch=False)
-            logger.info(f"Создан новый пользователь {user_data['user_id']}")
-            return self.execute_query(check_query, (user_data['user_id'],))[0]
-
-    def save_certificate_order(self, user_id: int, username: str, full_name: str, certificate_type: str) -> int:
-        """Сохранить заказ справки"""
-        query = """
-        INSERT INTO certificate_orders (user_id, username, full_name, certificate_type, status)
-        VALUES (?, ?, ?, ?, 'new')
-        """
-        result = self.execute_query(query, (user_id, username, full_name, certificate_type))
-        return result['lastrowid'] if result else None
-
-    def get_orders_by_status(self, status: str = 'new') -> List[Dict]:
-        """Получить заказы по статусу"""
-        query = """
-        SELECT * FROM certificate_orders 
-        WHERE status = ? 
-        ORDER BY created_at DESC
-        """
-        return self.execute_query(query, (status,))
-
-    def update_order_status(self, order_id: int, status: str, admin_comment: str = None):
-        """Обновить статус заказа"""
-        query = """
-        UPDATE certificate_orders 
-        SET status = ?, processed_at = CURRENT_TIMESTAMP, admin_comment = ?
-        WHERE order_id = ?
-        """
-        self.execute_query(query, (status, admin_comment, order_id), fetch=False)
-
-    def get_types_of_specialties(self) -> List[Dict]:
-        query = "SELECT * FROM types_of_specialties ORDER BY name"
-        return self.execute_query(query)
-
-    def get_specialties_by_type(self, type_id: int) -> List[Dict]:
-        query = """
-        SELECT s.*, t.name as type_name
-        FROM specialties s
-        LEFT JOIN types_of_specialties t ON s.tos_id = t.tos_id
-        WHERE s.tos_id = ?
-        ORDER BY s.code
-        """
-        return self.execute_query(query, (type_id,))
-
-    def get_documents(self) -> List[Dict]:
-        query = "SELECT * FROM documents ORDER BY priority, name"
-        return self.execute_query(query)
-
-    def get_dormitory_prices(self) -> List[Dict]:
-        query = "SELECT * FROM dormitory ORDER BY price_per_month"
-        return self.execute_query(query)
-
-    def get_dormitory_addresses(self) -> List[Dict]:
-        query = "SELECT address_id, address, phone_number FROM dormitory_addresses ORDER BY address"
-        return self.execute_query(query)
-
-    def get_educators_by_address(self) -> Dict[str, List[Dict]]:
-        query = """
-        SELECT e.*, p.name as position_name, da.address as dormitory_address, da.phone_number as dormitory_phone
-        FROM educators e
-        LEFT JOIN positions p ON e.position_id = p.position_id
-        LEFT JOIN dormitory_addresses da ON e.address_id = da.address_id
-        WHERE da.address IS NOT NULL
-        ORDER BY da.address, p.name, e.full_name
-        """
-        educators = self.execute_query(query)
-        grouped = {}
-        for educator in educators:
-            if educator:
-                address = educator.get('dormitory_address')
-                if address is None:
-                    address = 'Не указан адрес'
-                if address not in grouped:
-                    grouped[address] = []
-                grouped[address].append(educator)
-        return grouped
-
-    def get_important_dates(self, limit: int = 20) -> List[Dict]:
-        query = "SELECT * FROM important_dates ORDER BY date_value LIMIT ?"
-        return self.execute_query(query, (limit,))
-
-    def get_contacts(self) -> List[Dict]:
-        query = "SELECT * FROM contacts ORDER BY priority"
-        return self.execute_query(query)
-
-    def get_link_type_by_name(self, type_name: str) -> Optional[Dict]:
-        query = "SELECT * FROM link_types WHERE name = ?"
-        result = self.execute_query(query, (type_name,))
-        return result[0] if result else None
-
-    def get_links_by_type_id(self, type_id: int) -> List[Dict]:
-        query = """
-        SELECT l.*, lt.name as type_name
-        FROM links l
-        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        WHERE l.link_type_id = ?
-        ORDER BY l.name
-        """
-        return self.execute_query(query, (type_id,))
-
-    def get_links_by_type_name(self, type_name: str) -> List[Dict]:
-        """Получить ссылки по названию типа"""
-        query = """
-        SELECT l.*, lt.name as type_name
-        FROM links l
-        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        WHERE lt.name = ?
-        ORDER BY l.name
-        """
-        return self.execute_query(query, (type_name,))
-
-    def get_all_links(self) -> List[Dict]:
-        query = """
-        SELECT l.*, lt.name as type_name
-        FROM links l
-        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        ORDER BY lt.name, l.name
-        """
-        return self.execute_query(query)
-
-    def get_sports_activities(self) -> List[Dict]:
-        query = """
-        SELECT sa.sa_id, sa.name, sa.venue_id, v.name as venue_name 
-        FROM sports_activities sa
-        LEFT JOIN venues v ON sa.venue_id = v.venue_id
-        ORDER BY sa.name
-        """
-        return self.execute_query(query)
-
-    def get_venues(self) -> List[Dict]:
-        query = "SELECT venue_id, name FROM venues ORDER BY name"
-        return self.execute_query(query)
-
-    def get_activities_by_venue(self) -> Dict[str, List[Dict]]:
-        activities = self.get_sports_activities()
-        grouped = {}
-        for activity in activities:
-            venue_name = activity.get('venue_name', 'Без площадки')
-            if venue_name not in grouped:
-                grouped[venue_name] = []
-            grouped[venue_name].append(activity)
-        return grouped
-
+    def get_contacts(self):
+        cursor = self.conn.execute('SELECT contact_id, phone, email, address, working_hours, priority FROM contacts ORDER BY priority')
+        return cursor.fetchall()
+    def get_important_dates(self):
+        cursor = self.conn.execute('SELECT date_id, title, date_value, description FROM important_dates ORDER BY date_value')
+        return cursor.fetchall()
+    def get_all_links(self):
+        cursor = self.conn.execute('SELECT link_id, name, url, priority FROM links ORDER BY priority')
+        return cursor.fetchall()
+    def get_dormitory_prices(self):
+        cursor = self.conn.execute('SELECT dorm_id, type_places, price_per_month FROM dormitory ORDER BY price_per_month')
+        return cursor.fetchall()
+    def get_documents(self):
+        cursor = self.conn.execute('SELECT doc_id, name, description, is_required, priority FROM documents ORDER BY priority')
+        return cursor.fetchall()
+    def get_sports_activities(self):
+        cursor = self.conn.execute('''
+            SELECT sa_id, name, venue_id, description, schedule
+            FROM sports_activities 
+            ORDER BY name''')
+        return cursor.fetchall()
     def close(self):
-        if self.connection:
-            self.connection.close()
-            logger.info("Соединение с БД закрыто")
+        self.conn.close()
 
 class AdmissionsBot:
-    def __init__(self, token: str, db: Database, admin_ids: List[int], config: Config):
+    def __init__(self, token: str, db: Database, admin_ids: list, config: Config):
         self.bot = Bot(token=token)
         self.db = db
         self.admin_ids = admin_ids
         self.config = config
         self.dp = Dispatcher()
-        self.user_states = {}  # Для хранения состояний пользователей (ФИО, тип справки)
+        self.user_states = {}
+        self.user_menu_state = {}
         self.register_handlers()
-
     def register_handlers(self):
         @self.dp.bot_started()
-        async def on_bot_started(event: BotStarted):
-            await self.handle_bot_started(event)
+        async def on_started(event: BotStarted):
+            await event.bot.send_message(
+                chat_id=event.chat_id,
+                text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы.")
+
         @self.dp.message_created(Command('start'))
         async def on_start(event: MessageCreated):
-            await self.handle_start(event)
+            user_id = event.message.sender.user_id
+            first_name = event.message.sender.first_name
+            last_name = getattr(event.message.sender, 'last_name', '')
+            self.db.get_or_create_user(user_id, first_name, last_name)
+            self.user_menu_state[user_id] = 'main'
+            await self.show_main_menu(event)
+
         @self.dp.message_created(Command('admin'))
         async def on_admin(event: MessageCreated):
             await self.handle_admin(event)
-        @self.dp.callback_query()
-        async def on_callback(event: CallbackQuery):
-            await self.handle_callback(event)
+
         @self.dp.message_created()
         async def on_message(event: MessageCreated):
             await self.handle_message(event)
 
-    async def handle_bot_started(self, event: BotStarted):
-        await event.bot.send_message(
-            chat_id=event.chat_id,
-            text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы."
-        )
+    async def show_main_menu(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        text = """
+🏠 ГЛАВНОЕ МЕНЮ
 
-    async def handle_start(self, event: MessageCreated):
-        """Обработчик команды /start"""
-        user_data = {
-            'user_id': event.message.from_user.id,
-            'username': event.message.from_user.username,
-            'first_name': event.message.from_user.first_name,
-            'last_name': event.message.from_user.last_name
-        }
-        self.db.get_or_create_user(user_data)
-        await self.show_main_menu(event)
+Добро пожаловать в бот ГПОУ "СПТ"!
 
+Выберите нужный раздел (отправьте номер):
+
+1 - 🎓 Специальности
+2 - 🏠 Общежитие
+3 - 🕐 Расписание звонков
+4 - 📞 Контакты
+5 - 📅 Важные даты
+6 - 📜 Документы и правила
+7 - ❓ Абитуриентам
+8 - ⚽ Внеурочные активности
+9 - 📄 Заказать справку
+0 - 🔙 Помощь
+        """
+        await event.message.answer(text)
+
+    async def show_specialties_types(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'specialties_types'
+        types = self.db.get_types_of_specialties()
+        if not types:
+            await event.message.answer("Информация о специальностях временно недоступна.\n\n🔙 Отправьте 0 для возврата в главное меню")
+            return
+        text = "🎓 ВЫБЕРИТЕ ТИП СПЕЦИАЛЬНОСТИ:\n\n"
+        for t in types:
+            text += f"{t['tos_id']} - {t['name']}\n"
+        text += "\nОтправьте номер типа специальности или 0 для возврата в главное меню:"
+        await event.message.answer(text)
+
+    async def show_specialties_by_type(self, event: MessageCreated, type_id: int):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'specialties_list'
+        types = self.db.get_types_of_specialties()
+        type_name = None
+        for t in types:
+            if t['tos_id'] == type_id:
+                type_name = t['name']
+                break
+        if not type_name:
+            await event.message.answer("Тип специальности не найден.")
+            await self.show_specialties_types(event)
+            return
+        specialties = self.db.get_specialties_by_type(type_id)
+        if not specialties:
+            await event.message.answer(f"В разделе '{type_name}' пока нет специальностей.")
+            await self.show_specialties_types(event)
+            return
+
+        text = f"🎓 {type_name}\n\n"
+        for spec in specialties:
+            text += f"📌 *{spec['code']} - {spec['name']}*\n"
+            if spec['description']:
+                text += f"   - {spec['description']}\n"
+            duration = spec['duration_years']
+            if duration:
+                try:
+                    duration = int(duration)
+                    years = duration // 12
+                    months = duration % 12
+                    if years > 0:
+                        text += f"   - Срок обучения: {years} г"
+                        if months > 0:
+                            text += f" {months} мес"
+                        text += "\n"
+                    elif months > 0:
+                        text += f"   - Срок обучения: {months} мес\n"
+                except (ValueError, TypeError):
+                    text += f"   - Срок обучения: {duration}\n"
+            if spec['budget_places']:
+                text += f"   - Бюджетных мест: {spec['budget_places']}\n"
+            if spec['paid_places']:
+                text += f"   - Платных мест: {spec['paid_places']}\n"
+            if spec['price_per_year']:
+                text += f"   - Стоимость: {spec['price_per_year']} руб/год\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 чтобы вернуться к выбору типа специальности"
+        await event.message.answer(text)
+
+    async def show_dormitory(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        prices = self.db.get_dormitory_prices()
+        text = "🏠 ИНФОРМАЦИЯ ОБ ОБЩЕЖИТИИ\n\n"
+        if prices and len(prices) > 0:
+            text += "Стоимость проживания:\n"
+            for price in prices:
+                text += f"• {price['type_places']}: {price['price_per_month']} руб/мес\n"
+        else:
+            text += "Информация о стоимости проживания временно недоступна.\n"
+
+        text += "\n\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+
+    async def show_schedule(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        await event.message.answer(self.config.bell_schedule + "\n\n🔙 Отправьте 0 для возврата в главное меню")
+    async def show_contacts(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        contacts = self.db.get_contacts()
+        if not contacts or len(contacts) == 0:
+            await event.message.answer("КОНТАКТНАЯ ИНФОРМАЦИЯ\n\nИнформация о контактах временно недоступна.\n\n🔙 Отправьте 0 для возврата в главное меню")
+            return
+        text = "📞 КОНТАКТНАЯ ИНФОРМАЦИЯ\n\n"
+        for i, contact in enumerate(contacts, 1):
+            text += f"*Филиал {i}:*\n"
+            if contact['phone']:
+                text += f"   - Телефон: {contact['phone']}\n"
+            if contact['email']:
+                text += f"   - Email: {contact['email']}\n"
+            if contact['address']:
+                text += f"   - Адрес: {contact['address']}\n"
+            if contact['working_hours']:
+                text += f"   - Часы работы: {contact['working_hours']}\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+    async def show_dates(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        dates = self.db.get_important_dates()
+        if not dates or len(dates) == 0:
+            await event.message.answer("📅 *ВАЖНЫЕ ДАТЫ*\n\nНа данный момент нет актуальных дат.\n\n🔙 Отправьте 0 для возврата в главное меню")
+            return
+        text = "📅 ВАЖНЫЕ ДАТЫ\n\n"
+        for date_item in dates:
+            text += f"   - *{date_item['title']}*\n"
+            text += f"   - Дата: {date_item['date_value']}\n"
+            if date_item['description']:
+                text += f"   - {date_item['description']}\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+    async def show_documents(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        links = self.db.get_all_links()
+        if not links or len(links) == 0:
+            await event.message.answer("📜 *ДОКУМЕНТЫ И ПРАВИЛА*\n\nДокументы временно недоступны.\n\n🔙 Отправьте 0 для возврата в главное меню")
+            return
+        text = "📜 ДОКУМЕНТЫ И ПРАВИЛА\n\n"
+        for link in links:
+            text += f"   - {link['name']}: {link['url']}\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+    async def show_for_applicants(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        documents = self.db.get_documents()
+        text = "❓ КАК СТАТЬ СТУДЕНТОМ?\n\n"
+        if documents and len(documents) > 0:
+            text += "Для успешного поступления необходимы следующие документы: \n"
+            for doc in documents:
+                required = "Обязательный" if doc['is_required'] else "Дополнительный"
+                text += f"• {doc['name']} ({required})\n"
+                if doc['description']:
+                    text += f"  {doc['description']}\n"
+        else:
+            text += "Информация о документах временно недоступна.\n"
+        text += "\n\nДо встречи, будущий студент!"
+        text += "\n\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+
+    async def show_activities(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        activities = self.db.get_sports_activities()
+        if not activities or len(activities) == 0:
+            await event.message.answer("⚽ ВНЕУРОЧНЫЕ АКТИВНОСТИ\n\nИнформация о внеурочных активностях временно недоступна.\n\n🔙 Отправьте 0 для возврата в главное меню")
+            return
+        text = "⚽ ВНЕУРОЧНЫЕ АКТИВНОСТИ\n\n"
+        for activity in activities:
+            text += f"   - {activity['name']}*\n"
+            if activity['schedule']:
+                text += f"   - Расписание: {activity['schedule']}\n"
+            if activity['description']:
+                text += f"   - {activity['description']}\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+
+    async def start_order(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_states[user_id] = {'step': 'waiting_name'}
+        await event.message.answer(
+            "📄 ЗАКАЗ СПРАВКИ\n\n"
+            "Введите ваше полное ФИО:\n"
+            "Пример: Иванов Иван Иванович\n\n"
+            "🔙 Отправьте 0 для отмены")
+
+    async def show_help(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        text = """
+🔍 СПРАВКА ПО КОМАНДАМ
+
+/start - Главное меню
+Для навигации отправляйте номер раздела:
+1 - Специальности
+2 - Общежитие
+3 - Расписание звонков
+4 - Контакты
+5 - Важные даты
+6 - Документы и правила
+7 - Абитуриентам
+8 - Внеурочные активности
+9 - Заказать справку
+
+0 - Вернуться в главное меню"""
+        await event.message.answer(text)
     async def handle_admin(self, event: MessageCreated):
-        """Обработчик команды /admin - показывает новые заказы справок"""
-        if event.message.from_user.id not in self.admin_ids:
+        user_id = event.message.sender.user_id
+        if user_id not in self.admin_ids:
             await event.message.answer("⛔ У вас нет прав администратора.")
             return
-        
-        # Получаем новые заказы
-        new_orders = self.db.get_orders_by_status('new')
-        
+        new_orders = self.db.get_new_orders()
         if not new_orders:
-            text = "📋 *Нет новых заказов справок*"
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "📜 Посмотреть обработанные", "callback_data": "admin_processed_orders"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        else:
-            text = f"📋 *Новые заказы справок:* ({len(new_orders)})\n\n"
-            for order in new_orders:
-                text += f"*Заказ #{order['order_id']}*\n"
-                text += f"👤 Студент: {order['full_name']}\n"
-                if order['username']:
-                    text += f"📱 Username: @{order['username']}\n"
-                text += f"📄 Тип справки: {order['certificate_type']}\n"
-                text += f"🕐 Создан: {order['created_at']}\n"
-                text += f"➖➖➖➖➖➖➖➖➖\n"
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "✅ Отметить как выполненные", "callback_data": "admin_mark_processed"}],
-                    [{"text": "📜 Посмотреть обработанные", "callback_data": "admin_processed_orders"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        
-        await event.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+            await event.message.answer("Нет новых заказов справок.")
+            return
+        await event.message.answer(f"📋 НОВЫЕ ЗАКАЗЫ СПРАВОК: (всего {len(new_orders)})\n")
+        for order in new_orders:
+            group = order['student_group'] if order['student_group'] else 'не указана'
+            text = f"═══════════════════════════\n"
+            text += f"Заказ #{order['order_id']}\n"
+            text += f"   - Студент: {order['student_full_name']}\n"
+            text += f"   - Группа: {group}\n"
+            text += f"   - Тип: {order['certificate_type']}\n"
+            if order.get('student_message'):
+                text += f"   - Сообщение: {order['student_message']}\n"
+            text += f"   - Создан: {order['order_date']}\n"
+            text += f"═══════════════════════════"
+            await event.message.answer(text)
+            await asyncio.sleep(0.3)
 
     async def handle_message(self, event: MessageCreated):
-        """Обработка текстовых сообщений (для заказа справок)"""
-        user_id = event.message.from_user.id
-        text = event.message.text
-        
-        # Проверяем состояние пользователя
+        user_id = event.message.sender.user_id
+        text = event.message.body.text
         if user_id in self.user_states:
             state = self.user_states[user_id]
-            
-            if state['action'] == 'waiting_full_name':
-                # Сохраняем ФИО и запрашиваем тип справки
-                self.user_states[user_id]['full_name'] = text
-                self.user_states[user_id]['action'] = 'waiting_certificate_type'
-                
-                keyboard = {
-                    "inline_keyboard": [
-                        [{"text": "📄 Справка об обучении", "callback_data": "cert_type_обучении"}],
-                        [{"text": "📊 Академическая справка", "callback_data": "cert_type_академическая"}],
-                        [{"text": "💳 Справка для социальной стипендии", "callback_data": "cert_type_социальная"}],
-                        [{"text": "🏥 Справка о состоянии здоровья", "callback_data": "cert_type_здоровье"}],
-                        [{"text": "📝 Другая справка", "callback_data": "cert_type_другая"}],
-                        [{"text": "🔙 Отмена", "callback_data": "cancel_order"}]
-                    ]
-                }
-                await event.message.answer("📋 *Выберите тип справки:*", parse_mode="Markdown", reply_markup=keyboard)
-                
-            elif state['action'] == 'waiting_certificate_type':
-                # Это уже обрабатывается в callback, но на всякий случай
-                pass
-            
-            elif state['action'] == 'waiting_other_certificate':
-                # Сохраняем другой тип справки
-                certificate_type = f"Другое: {text}"
-                await self.save_and_notify_order(event, state['full_name'], certificate_type)
+            if state['step'] == 'waiting_name':
+                if text == '0':
+                    del self.user_states[user_id]
+                    await self.show_main_menu(event)
+                    return
+                self.user_states[user_id]['name'] = text
+                self.user_states[user_id]['step'] = 'waiting_group'
+                await event.message.answer(
+                    "📚 Введите номер группы:\n"
+                    "🔙 Отправьте 0 для отмены")
+                return
+            elif state['step'] == 'waiting_group':
+                if text == '0':
+                    del self.user_states[user_id]
+                    await self.show_main_menu(event)
+                    return
+                self.user_states[user_id]['group'] = text
+                self.user_states[user_id]['step'] = 'waiting_type'
+                await event.message.answer(
+                    "📄 *ВЫБЕРИТЕ ТИП СПРАВКИ:*\n\n"
+                    "1 - Справка об обучении\n"
+                    "2 - Академическая справка\n"
+                    "3 - Справка о состоянии здоровья\n"
+                    "4 - Другое (напишите вручную)\n\n"
+                    "Отправьте номер или напишите свой вариант:\n"
+                    "🔙 Отправьте 0 для отмены")
+                return
+            elif state['step'] == 'waiting_type':
+                if text == '0':
+                    del self.user_states[user_id]
+                    await self.show_main_menu(event)
+                    return
+                name = self.user_states[user_id]['name']
+                group = self.user_states[user_id]['group']
+                cert_type = text
+                type_map = {
+                    '1': 'Справка об обучении',
+                    '2': 'Академическая справка',
+                    '3': 'Справка о состоянии здоровья'}
+                if text in type_map:
+                    cert_type = type_map[text]
+                order_id = self.db.save_order(user_id, name, group, cert_type)
                 del self.user_states[user_id]
-        
-        # Игнорируем команды
-        elif text.startswith('/'):
-            pass
-
-    async def save_and_notify_order(self, event: MessageCreated, full_name: str, certificate_type: str):
-        """Сохранить заказ и уведомить администраторов"""
-        user_id = event.message.from_user.id
-        username = event.message.from_user.username
-        
-        # Сохраняем в БД
-        order_id = self.db.save_certificate_order(user_id, username, full_name, certificate_type)
-        
-        if order_id:
-            # Подтверждение пользователю
+                await event.message.answer(
+                    f"✅ Заказ на справку #{order_id} ПРИНЯТ!\n\n"
+                    f"👤 ФИО: {name}\n"
+                    f"📚 Группа: {group}\n"
+                    f"📄 Тип: {cert_type}\n\n"
+                    f"═══════════════════════════\n\n" 
+                    f"🔙 Отправьте 0 для отмены")
+                for admin_id in self.admin_ids:
+                    await event.bot.send_message(
+                        chat_id=admin_id,
+                        text=f"🔔 *НОВЫЙ ЗАКАЗ СПРАВКИ #{order_id}*\n👤 {name}\n📚 {group}\n📄 {cert_type}")
+                await self.show_main_menu(event)
+                return
+        if text == '0':
+            if user_id not in self.user_states:
+                await self.show_main_menu(event)
+            return
+        menu_state = self.user_menu_state.get(user_id, 'main')
+        if menu_state == 'specialties_types':
+            if text.isdigit() and int(text) > 0:
+                type_id = int(text)
+                types = self.db.get_types_of_specialties()
+                type_ids = [t['tos_id'] for t in types]
+                if type_id in type_ids:
+                    await self.show_specialties_by_type(event, type_id)
+                else:
+                    await event.message.answer("Неверный номер типа специальности. Попробуйте снова:")
+            else:
+                await event.message.answer("Пожалуйста, отправьте номер типа специальности:")
+            return
+        elif menu_state == 'specialties_list':
+            if text == '0':
+                await self.show_specialties_types(event)
+            else:
+                await event.message.answer("🔙 Отправьте 0 чтобы вернуться к выбору типа специальности")
+            return
+        if text == '/start':
+            await self.show_main_menu(event)
+        elif text == '/admin':
+            await self.handle_admin(event)
+        elif text == '1':
+            await self.show_specialties_types(event)
+        elif text == '2':
+            await self.show_dormitory(event)
+        elif text == '3':
+            await self.show_schedule(event)
+        elif text == '4':
+            await self.show_contacts(event)
+        elif text == '5':
+            await self.show_dates(event)
+        elif text == '6':
+            await self.show_documents(event)
+        elif text == '7':
+            await self.show_for_applicants(event)
+        elif text == '8':
+            await self.show_activities(event)
+        elif text == '9':
+            await self.start_order(event)
+        elif text == '0' or text == '/help':
+            await self.show_help(event)
+        elif text and not text.startswith('/'):
             await event.message.answer(
-                f"✅ *Заказ справки принят!*\n\n"
-                f"Номер заказа: #{order_id}\n"
-                f"Тип справки: {certificate_type}\n\n"
-                f"Ожидайте, администратор свяжется с вами.",
-                parse_mode="Markdown"
-            )
-            
-            # Уведомляем всех администраторов
-            for admin_id in self.admin_ids:
-                try:
-                    admin_text = f"🔔 *Новый заказ справки!*\n\n"
-                    admin_text += f"*Заказ #{order_id}*\n"
-                    admin_text += f"👤 Студент: {full_name}\n"
-                    admin_text += f"📱 ID: {user_id}\n"
-                    if username:
-                        admin_text += f"📱 Username: @{username}\n"
-                    admin_text += f"📄 Тип справки: {certificate_type}\n"
-                    admin_text += f"🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-                    admin_text += f"Используйте /admin для просмотра всех заказов"
-                    
-                    await event.bot.send_message(
-                        chat_id=admin_id,
-                        text=admin_text,
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
-        else:
-            await event.message.answer("❌ Произошла ошибка при оформлении заказа. Попробуйте позже.")
-
-    async def show_main_menu(self, event: MessageCreated = None, callback_query: CallbackQuery = None):
-        text = """
-*Добро пожаловать в бот приемной комиссии!*
-
-Здесь вы найдете всю необходимую информацию.
-
-*Выберите нужный раздел:*
-        """
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "🎓 Специальности", "callback_data": "menu_specialties"},
-                    {"text": "🏠 Общежитие", "callback_data": "menu_dormitory"}
-                ],
-                [
-                    {"text": "🕐 Расписание", "callback_data": "menu_schedule"},
-                    {"text": "📞 Контакты", "callback_data": "menu_contacts"}
-                ],
-                [{"text": "📅 Важные даты", "callback_data": "menu_dates"}],
-                [{"text": "📜 Правила и уставы", "callback_data": "menu_rules"}],
-                [{"text": "❓ Абитуриентам", "callback_data": "menu_become_student"}],
-                [{"text": "⚽ Внеурочные активности", "callback_data": "menu_activities"}],
-                [{"text": "📄 Заказать справку", "callback_data": "menu_order_certificate"}]
-            ]
-        }
-        if callback_query:
-            await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-        else:
-            await event.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def start_certificate_order(self, callback_query: CallbackQuery):
-        """Начать процесс заказа справки"""
-        user_id = callback_query.from_user.id
-        
-        # Устанавливаем состояние пользователя
-        self.user_states[user_id] = {
-            'action': 'waiting_full_name',
-            'chat_id': callback_query.message.chat.id
-        }
-        
-        text = """
-📄 *Заказ справки*
-
-Пожалуйста, отправьте ваше *полное ФИО* в следующем формате:
-
-`Иванов Иван Иванович`
-
-Или укажите данные, как в студенческом билете.
-        """
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🔙 Отмена", "callback_data": "cancel_order"}]
-            ]
-        }
-        
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def cancel_order(self, callback_query: CallbackQuery):
-        """Отменить заказ справки"""
-        user_id = callback_query.from_user.id
-        if user_id in self.user_states:
-            del self.user_states[user_id]
-        
-        await callback_query.message.edit_text("❌ Заказ справки отменен.")
-        await asyncio.sleep(2)
-        await self.show_main_menu(callback_query=callback_query)
-
-    async def select_certificate_type(self, callback_query: CallbackQuery, cert_type: str):
-        """Выбор типа справки"""
-        user_id = callback_query.from_user.id
-        
-        if user_id not in self.user_states or self.user_states[user_id]['action'] != 'waiting_certificate_type':
-            await callback_query.answer("Пожалуйста, начните заказ заново", show_alert=True)
-            await self.start_certificate_order(callback_query)
-            return
-        
-        full_name = self.user_states[user_id]['full_name']
-        
-        if cert_type == "другая":
-            # Запрашиваем уточнение
-            self.user_states[user_id]['action'] = 'waiting_other_certificate'
-            text = "Пожалуйста, напишите название справки, которая вам нужна:"
-            await callback_query.message.edit_text(text, parse_mode="Markdown")
-        else:
-            # Сохраняем заказ
-            certificate_type_map = {
-                "обучении": "Справка об обучении",
-                "академическая": "Академическая справка",
-                "социальная": "Справка для социальной стипендии",
-                "здоровье": "Справка о состоянии здоровья"
-            }
-            certificate_type = certificate_type_map.get(cert_type, cert_type)
-            
-            # Создаем фиктивное событие для отправки
-            class FakeEvent:
-                def __init__(self, message, bot):
-                    self.message = message
-                    self.bot = bot
-            
-            fake_message = type('obj', (object,), {
-                'from_user': callback_query.from_user,
-                'answer': callback_query.message.edit_text
-            })()
-            fake_message.from_user = callback_query.from_user
-            fake_message.from_user.username = callback_query.from_user.username
-            
-            fake_event = FakeEvent(fake_message, callback_query.bot)
-            
-            await self.save_and_notify_order(fake_event, full_name, certificate_type)
-            del self.user_states[user_id]
-            await asyncio.sleep(3)
-            await self.show_main_menu(callback_query=callback_query)
-
-    async def show_processed_orders(self, callback_query: CallbackQuery):
-        """Показать обработанные заказы (только для админов)"""
-        if callback_query.from_user.id not in self.admin_ids:
-            await callback_query.answer("⛔ У вас нет прав администратора.", show_alert=True)
-            return
-        
-        processed_orders = self.db.get_orders_by_status('processed')
-        
-        if not processed_orders:
-            text = "📋 *Нет обработанных заказов*"
-        else:
-            text = f"📋 *Обработанные заказы:* ({len(processed_orders)})\n\n"
-            for order in processed_orders[:10]:  # Показываем последние 10
-                text += f"*Заказ #{order['order_id']}*\n"
-                text += f"👤 Студент: {order['full_name']}\n"
-                text += f"📄 Тип справки: {order['certificate_type']}\n"
-                text += f"✅ Обработан: {order['processed_at']}\n"
-                if order['admin_comment']:
-                    text += f"💬 Комментарий: {order['admin_comment']}\n"
-                text += f"➖➖➖➖➖➖➖➖➖\n"
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🔄 Обновить", "callback_data": "admin_processed_orders"}],
-                [{"text": "📋 Новые заказы", "callback_data": "admin_show_orders"}],
-                [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-            ]
-        }
-        
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def mark_orders_processed(self, callback_query: CallbackQuery):
-        """Отметить все новые заказы как обработанные"""
-        if callback_query.from_user.id not in self.admin_ids:
-            await callback_query.answer("⛔ У вас нет прав администратора.", show_alert=True)
-            return
-        
-        new_orders = self.db.get_orders_by_status('new')
-        
-        if not new_orders:
-            await callback_query.answer("Нет новых заказов для обработки", show_alert=True)
-            return
-        
-        for order in new_orders:
-            self.db.update_order_status(order['order_id'], 'processed', 'Обработано администратором')
-        
-        await callback_query.answer(f"✅ Отмечено {len(new_orders)} заказов как обработанные", show_alert=True)
-        await self.handle_admin(callback_query)  # Обновляем админ-панель
-
-    async def show_admin_orders(self, callback_query: CallbackQuery):
-        """Показать новые заказы (для админов)"""
-        if callback_query.from_user.id not in self.admin_ids:
-            await callback_query.answer("⛔ У вас нет прав администратора.", show_alert=True)
-            return
-        
-        await self.handle_admin(callback_query)
-
-    async def show_specialties_menu(self, callback_query: CallbackQuery):
-        specialties_types = self.db.get_types_of_specialties()
-        if not specialties_types:
-            text = "Типы специальностей временно недоступны."
-            keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        else:
-            text = "*Выберите тип специальности:*"
-            buttons = []
-            for type_spec in specialties_types:
-                tos_id = type_spec.get('tos_id')
-                buttons.append([{"text": type_spec['name'], "callback_data": f"type_{tos_id}"}])
-            buttons.append([{"text": "🔙 Назад", "callback_data": "main_menu"}])
-            keyboard = {"inline_keyboard": buttons}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_specialties_by_type(self, callback_query: CallbackQuery, type_id: int):
-        specialties = self.db.get_specialties_by_type(type_id)
-        spec_types = self.db.get_types_of_specialties()
-        spec_type = next((t for t in spec_types if t.get('tos_id') == type_id), None)
-        if not specialties:
-            type_name = spec_type['name'] if spec_type else "Тип"
-            type_name_escaped = self.escape_markdown(type_name)
-            text = f"📚 *{type_name_escaped}*\n\nСпециальности временно недоступны."
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔙 Назад к типам", "callback_data": "menu_specialties"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        else:
-            type_name = spec_type['name'] if spec_type else "Специальности"
-            type_name_escaped = self.escape_markdown(type_name)
-            text = f"- *{type_name_escaped}*\n\n"
-            for spec in specialties:
-                spec_name = self.escape_markdown(spec['name'])
-                text += f"*{spec['code']} - {spec_name}*\n"
-                description = spec.get('description', '')
-                if description:
-                    text += f"- {self.escape_markdown(description)}\n"
-                if spec.get('duration_years'):
-                    months = int(spec['duration_years'])
-                    years = months // 12
-                    remaining_months = months % 12
-                    if years > 0:
-                        text += f"- *Срок обучения:* {years} год"
-                        if remaining_months > 0:
-                            text += f" {remaining_months} мес"
-                        text += "\n"
-                    elif remaining_months > 0:
-                        text += f"- *Срок обучения:* {remaining_months} мес\n"
-                if spec.get('budget_places'):
-                    text += f"- *Бюджетных мест:* {spec['budget_places']}\n"
-                if spec.get('paid_places'):
-                    text += f"- *Платных мест:* {spec['paid_places']}\n"
-                if spec.get('price_per_year'):
-                    text += f"- *Стоимость за год обучения:* {spec['price_per_year']} руб.\n"
-                text += "\n"
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔙 Назад к типам", "callback_data": "menu_specialties"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_dormitory_menu(self, callback_query: CallbackQuery):
-        dormitory_prices = self.db.get_dormitory_prices()
-        educators_by_address = self.db.get_educators_by_address()
-        dormitory_addresses = self.db.get_dormitory_addresses()
-        text = "*Информация об общежитии:*\n\n"
-        if dormitory_prices:
-            text += "Для иногородних студентов мы предоставляем место в общежитии.\n\n*Стоимость проживания:*\n\n"
-            for price in dormitory_prices:
-                type_places = price.get('type_places', 'Не указано')
-                text += f"*{self.escape_markdown(type_places)}*\n"
-                price_val = price.get('price_per_month', 0)
-                if price_val:
-                    text += f"- {price_val} руб./месяц\n\n"
-                else:
-                    text += f"- Цена не указана\n\n"
-        if dormitory_addresses:
-            text += "\n*Адреса общежитий:*\n\n"
-            for address_info in dormitory_addresses:
-                address = address_info.get('address', 'Адрес не указан')
-                phone_number = address_info.get('phone_number', '')
-                text += f"- *{self.escape_markdown(address)}*\n"
-                if phone_number:
-                    text += f"  — Телефон: {phone_number}\n"
-                text += "\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_schedule_menu(self, callback_query: CallbackQuery):
-        """Показать расписание"""
-        text = self.config.bell_schedule
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_contacts_menu(self, callback_query: CallbackQuery):
-        contacts = self.db.get_contacts()
-        text = "*Контактная информация:*\n\n"
-        if contacts:
-            for i, contact in enumerate(contacts, 1):
-                text += f"*Филиал {i}:*\n"
-                if contact.get('phone'):
-                    text += f"- *Телефон:* {contact['phone']}\n"
-                if contact.get('email'):
-                    text += f"- *Email:* {contact['email']}\n"
-                if contact.get('address'):
-                    text += f"- *Адрес:* {self.escape_markdown(contact['address'])}\n"
-                if contact.get('working_hours'):
-                    text += f"- *Часы работы:*\n{contact['working_hours']}\n"
-                text += "\n"
-        else:
-            text += "Контакты временно недоступны.\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_dates_menu(self, callback_query: CallbackQuery):
-        dates = self.db.get_important_dates()
-        if not dates:
-            text = "На данный момент нет актуальных дат."
-        else:
-            text = "*Важные даты:*\n\n"
-            for date_item in dates:
-                date_value = date_item.get('date_value')
-                if date_value:
-                    date_str = date_value if isinstance(date_value, str) else datetime.strptime(date_value, '%Y-%m-%d').strftime("%d.%m.%Y")
-                else:
-                    date_str = "Дата не указана"
-                text += f"- *{date_item['title']}*\n"
-                text += f"Запланированно на {date_str}\n"
-                if date_item.get('description'):
-                    text += f"Ссылка: {date_item['description']}\n"
-                text += "\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_rules_menu(self, callback_query: CallbackQuery):
-    """Показать правила и уставы (ссылки)"""
-    # Получаем ВСЕ ссылки из базы данных
-    all_links = self.db.get_all_links()
-    
-    if not all_links:
-        text = "📜 *Правила и уставы*\n\nНа данный момент нет доступных документов."
-    else:
-        text = "*📜 Правила и уставы:*\n\n"
-        rules_links = []
-        statutes_links = []
-        other_links = []
-        for link in all_links:
-            link_type = link.get('type_name', '').lower()
-            if link_type == 'rules':
-                rules_links.append(link)
-            elif link_type == 'statutes':
-                statutes_links.append(link)
-            else:
-                other_links.append(link)
-        if rules_links:
-            text += "*Правила:*\n"
-            for link in rules_links:
-                link_name = self.escape_markdown(link['name'])
-                link_url = link['url']
-                text += f"• [{link_name}]({link_url})\n"
-            text += "\n"
-        if statutes_links:
-            text += "*Уставы:*\n"
-            for link in statutes_links:
-                link_name = self.escape_markdown(link['name'])
-                link_url = link['url']
-                text += f"• [{link_name}]({link_url})\n"
-            text += "\n"
-        if other_links:
-            text += "*Другие документы:*\n"
-            for link in other_links:
-                link_name = self.escape_markdown(link['name'])
-                link_url = link['url']
-                text += f"• [{link_name}]({link_url})\n"
-            text += "\n"
-    
-    keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-    await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True)
-    async def show_become_student_menu(self, callback_query: CallbackQuery):
-        documents = self.db.get_documents()
-        contacts = self.db.get_contacts()
-        text = "*Как стать студентом?*\n"
-        if documents:
-            text += "\n*Необходимые документы:*\n"
-            for doc in documents:
-                doc_name = self.escape_markdown(doc['name'])
-                text += f"*{doc_name}*\n"
-                if doc.get('description'):
-                    text += f"ℹ️ {self.escape_markdown(doc['description'])}\n"
-                is_required = doc.get('is_required', True)
-                required_text = "Обязательный" if is_required else "Дополнительный"
-                text += f"   - {required_text}\n\n"
-        if contacts:
-            text += "\n*Для подачи документов обращайтесь:*\n"
-            for contact in contacts:
-                if contact.get('address'):
-                    text += f"- {self.escape_markdown(contact['address'])}\n"
-                if contact.get('phone'):
-                    text += f"- {contact['phone']}\n"
-                if contact.get('working_hours'):
-                    text += f"- {contact['working_hours']}\n\n"
-        text += "\n*До встречи, будущий студент!*"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-    async def show_activities_menu(self, callback_query: CallbackQuery):
-        activities_by_venue = self.db.get_activities_by_venue()
-        if not activities_by_venue:
-            text = "*Внеурочные активности*\n\nНа данный момент информация о внеурочных активностях недоступна."
-        else:
-            text = "*Внеурочные активности для студентов:*\n\n"
-            for venue_name, activities in activities_by_venue.items():
-                venue_name_escaped = self.escape_markdown(venue_name)
-                text += f"*- {venue_name_escaped}*\n"
-                if activities:
-                    for activity in activities:
-                        activity_name = self.escape_markdown(activity['name'])
-                        text += f"  • {activity_name}\n"
-                else:
-                    text += "  • На этой площадке пока нет активностей\n"
-                text += "\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    def escape_markdown(self, text: str) -> str:
-        if not text:
-            return ""
-        escape_chars = ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-        for char in escape_chars:
-            text = text.replace(char, f'\\{char}')
-        return text
-
-    async def handle_callback(self, event: CallbackQuery):
-        data = event.data
-        try:
-            if data == "main_menu":
-                await self.show_main_menu(callback_query=event)
-            elif data == "menu_specialties":
-                await self.show_specialties_menu(event)
-            elif data == "menu_dormitory":
-                await self.show_dormitory_menu(event)
-            elif data == "menu_schedule":
-                await self.show_schedule_menu(event)
-            elif data == "menu_contacts":
-                await self.show_contacts_menu(event)
-            elif data == "menu_dates":
-                await self.show_dates_menu(event)
-            elif data == "menu_rules":
-                await self.show_rules_menu(event)
-            elif data == "menu_become_student":
-                await self.show_become_student_menu(event)
-            elif data == "menu_activities":
-                await self.show_activities_menu(event)
-            elif data == "menu_order_certificate":
-                await self.start_certificate_order(event)
-            elif data == "cancel_order":
-                await self.cancel_order(event)
-            elif data.startswith("cert_type_"):
-                cert_type = data.split("_")[2]
-                await self.select_certificate_type(event, cert_type)
-            elif data.startswith("type_"):
-                type_id = int(data.split("_")[1])
-                await self.show_specialties_by_type(event, type_id)
-            elif data == "admin_show_orders":
-                await self.show_admin_orders(event)
-            elif data == "admin_processed_orders":
-                await self.show_processed_orders(event)
-            elif data == "admin_mark_processed":
-                await self.mark_orders_processed(event)
-            else:
-                await event.answer("Действие не распознано", show_alert=True)
-        except Exception as e:
-            logger.error(f"Ошибка обработки callback: {e}")
-            await event.message.edit_text(
-                "❌ Произошла ошибка. Попробуйте еще раз.",
-                reply_markup={"inline_keyboard": [[{"text": "🏠 Главное меню", "callback_data": "main_menu"}]]}
-            )
-        await event.answer()
-
+                "Неизвестная команда.\n\n"
+                "Отправьте /start для главного меню или /help для справки.")
     async def start(self):
-        """Запуск бота"""
-        logger.info("Запуск бота для Max...")
-        try:
-            specialties = self.db.execute_query("SELECT COUNT(*) as count FROM specialties")
-            types = self.db.get_types_of_specialties()
-            links = self.db.get_all_links()
-            specs_count = specialties[0]['count'] if specialties else 0
-            print("\n" + "=" * 30)
-            print("Бот для Max успешно запущен!")
-            print(f"Специальностей в базе: {specs_count}")
-            print(f"Типов специальностей: {len(types)}")
-            print(f"Ссылок в базе: {len(links)}")
-            print("=" * 30 + "\n")
-        except Exception as e:
-            logger.error(f"❌ Ошибка проверки БД: {e}")
-            print(f"\n❌ Ошибка подключения к БД: {e}")
-            return
         await self.dp.start_polling(self.bot)
 
 def main():
-    print("=" * 30)
-    print("БОТ ПРИЕМНОЙ КОМИССИИ ДЛЯ MAX")
-    print("=" * 30)
     config = Config()
+    db = Database(config)
+    bot = AdmissionsBot(config.bot_token, db, config.admin_ids, config)
     try:
-        db = Database(config)
-        bot = AdmissionsBot(config.bot_token, db, config.admin_ids, config)
-        print("\nЗапускаю бота...")
         asyncio.run(bot.start())
-    except Exception as e:
-        print(f"\nОШИБКА ПРИ ЗАПУСКЕ: {e}")
-        print("\nВозможные причины:")
-        print("1. Отсутствует файл базы данных admissions_bot.db")
-        print("2. Неправильный токен бота для Max")
-        print("3. Проблемы с подключением к Max API")
+    except KeyboardInterrupt:
+        print("\nБот остановлен")
     finally:
-        if 'db' in locals():
-            db.close()
-
-if __name__ == "__main__":
-    main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import asyncio
-import logging
-import sys
-import sqlite3
-from typing import Dict, List, Optional
-from datetime import datetime
-
-from maxapi import Bot, Dispatcher
-from maxapi.types import BotStarted, Command, MessageCreated, CallbackQuery
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log', encoding='utf-8')
-    ]
-)
-logger = logging.getLogger(__name__)
-
-class Config:
-    def __init__(self):
-        self.db_path = 'admissions_bot.db'
-        self.bot_token = 'max bot token'
-        self.admin_ids = [ID max]
-        self.bell_schedule = """
-🕐 *Расписание звонков:*
-
-*Понедельник:*
-
-*Классный час:* 8:15 - 9:00
-*Завтрак:* 9:00 - 9:20
-*1 пара* (1-2 уроки):
-              • 09:20 - 10:05
-              • 10:15 - 11:00
-*2 пара* (3-4 уроки):
-              • 11:10 - 11:55
-*Обед:* 11:55 - 12:35
-              • 12:35 - 13:20
-*3 пара* (5-6 уроки):
-              • 13:30 - 14:15
-              • 14:25 - 15:10
-*Полдник:* 15:10 - 15:30
-*4 пара* (7-8 уроки):
-              • 15:30 - 16:15
-              • 16:25 - 17:10
-*5 пара* (9-10 уроки):
-              • 17:20 - 18:05
-              • 18:15 - 19:00
-
-*Вторник - Пятница:*
-
-*Десятиминутка для классных руководителей:* 8:00 - 8:10
-*1 пара* (1-2 уроки):
-              • 08:10 - 8:55
-*Завтрак:* 8:55 - 9:15
-              • 9:15 - 10:00
-*2 пара* (3-4 уроки):
-              • 10:10 - 10:55
-              • 11:05 - 11:50
-*Обед:* 11:50 - 12:30
-*3 пара* (5-6 уроки):
-              • 12:30 - 13:15
-              • 13:25 - 14:10
-*4 пара* (7-8 уроки):
-              • 14:20 - 15:05
-*Полдник:* 15:05 - 15:25
-              • 15:25 - 16:10
-*5 пара* (9-10 уроки):
-              • 16:20 - 17:05
-              • 17:15 - 18:00
-
-*Суббота:*
-
-*1 пара:* 08:10 - 9:10
-*2 пара:* 9:20 - 10:20
-*3 пара:* 10:30 - 11:30
-*4 пара:* 11:40 - 12:40
-*5 пара:* 12:50 - 13:50
-*6 пара:* 14:00 - 15:00
-
-*Учебная практика:*
-
-*1 смена:* 8:00 - 11:00
-*2 смена:* 11:15 - 14:15
-        """
-
-class Database:
-    def __init__(self, config: Config):
-        self.config = config
-        self.connection = None
-        self.connect()
-        self.create_tables()
-
-    def connect(self):
-        try:
-            self.connection = sqlite3.connect(self.config.db_path)
-            self.connection.row_factory = sqlite3.Row
-            self.connection.execute("PRAGMA foreign_keys = ON")
-            logger.info(f"Успешное подключение к БД: {self.config.db_path}")
-        except Exception as e:
-            logger.error(f"Ошибка подключения к БД: {e}")
-            raise
-
-    def create_tables(self):
-        """Создать все необходимые таблицы"""
-        queries = [
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT,
-                last_name TEXT,
-                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS certificate_orders (
-                order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                student_full_name TEXT NOT NULL,
-                certificate_type TEXT NOT NULL,
-                student_message TEXT,
-                status TEXT DEFAULT 'new',
-                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processed_date TIMESTAMP,
-                admin_comment TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS types_of_specialties (
-                tos_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                priority INTEGER DEFAULT 0
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS specialties (
-                spec_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tos_id INTEGER NOT NULL,
-                code TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                duration_years INTEGER,
-                budget_places INTEGER DEFAULT 0,
-                paid_places INTEGER DEFAULT 0,
-                price_per_year INTEGER DEFAULT 0,
-                FOREIGN KEY (tos_id) REFERENCES types_of_specialties(tos_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS documents (
-                doc_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                is_required BOOLEAN DEFAULT 1,
-                priority INTEGER DEFAULT 0
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS dormitory (
-                dorm_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type_places TEXT NOT NULL,
-                price_per_month INTEGER DEFAULT 0
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS dormitory_addresses (
-                address_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                address TEXT NOT NULL UNIQUE,
-                phone_number TEXT
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS positions (
-                position_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS educators (
-                educator_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                full_name TEXT NOT NULL,
-                position_id INTEGER,
-                address_id INTEGER,
-                phone_number TEXT,
-                email TEXT,
-                FOREIGN KEY (position_id) REFERENCES positions(position_id),
-                FOREIGN KEY (address_id) REFERENCES dormitory_addresses(address_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS important_dates (
-                date_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                date_value DATE NOT NULL,
-                description TEXT
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS contacts (
-                contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phone TEXT,
-                email TEXT,
-                address TEXT,
-                working_hours TEXT,
-                priority INTEGER DEFAULT 0
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS link_types (
-                link_type_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS links (
-                link_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                link_type_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                url TEXT NOT NULL,
-                priority INTEGER DEFAULT 0,
-                FOREIGN KEY (link_type_id) REFERENCES link_types(link_type_id)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS venues (
-                venue_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS sports_activities (
-                sa_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                venue_id INTEGER,
-                description TEXT,
-                schedule TEXT,
-                FOREIGN KEY (venue_id) REFERENCES venues(venue_id)
-            )
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_certificate_orders_user_id ON certificate_orders(user_id)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_certificate_orders_status ON certificate_orders(status)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_certificate_orders_order_date ON certificate_orders(order_date)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_specialties_tos_id ON specialties(tos_id)
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS idx_links_link_type_id ON links(link_type_id)
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
-            AFTER UPDATE ON users
-            BEGIN
-                UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE user_id = NEW.user_id;
-            END
-            """
-        ]
-        
-        for query in queries:
-            try:
-                self.execute_query(query, fetch=False)
-            except Exception as e:
-                logger.error(f"Ошибка создания таблицы/индекса: {e}")
-        
-        logger.info("Все таблицы проверены/созданы")
-
-    def execute_query(self, query: str, params: tuple = None, fetch: bool = True):
-        try:
-            if self.connection is None:
-                self.connect()
-            cursor = self.connection.cursor()
-            cursor.execute(query, params or ())
-            if fetch:
-                if query.strip().upper().startswith('SELECT'):
-                    result = cursor.fetchall()
-                    return [dict(row) for row in result] if result else []
-                elif query.strip().upper().startswith('INSERT'):
-                    self.connection.commit()
-                    return {'lastrowid': cursor.lastrowid} if cursor.lastrowid else None
-                else:
-                    self.connection.commit()
-                    return {'rowcount': cursor.rowcount} if cursor.rowcount > 0 else None
-            else:
-                self.connection.commit()
-                return None
-        except Exception as e:
-            logger.error(f"Ошибка выполнения запроса: {e}")
-            if self.connection:
-                self.connection.rollback()
-            raise
-
-    def get_or_create_user(self, user_data: Dict) -> Dict:
-        """Получить или создать пользователя"""
-        check_query = "SELECT * FROM users WHERE user_id = ?"
-        existing_user = self.execute_query(check_query, (user_data['user_id'],))
-
-        if existing_user:
-            current_user = existing_user[0]
-            needs_update = False
-            
-            if current_user.get('first_name') != user_data.get('first_name'):
-                needs_update = True
-            if current_user.get('last_name') != user_data.get('last_name'):
-                needs_update = True
-            
-            if needs_update:
-                update_query = """
-                UPDATE users 
-                SET first_name = ?, last_name = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ?
-                """
-                self.execute_query(update_query, (
-                    user_data.get('first_name'),
-                    user_data.get('last_name'),
-                    user_data['user_id']
-                ), fetch=False)
-                logger.info(f"Данные пользователя {user_data['user_id']} обновлены")
-            
-            return self.execute_query(check_query, (user_data['user_id'],))[0]
-        else:
-            insert_query = """
-            INSERT INTO users (user_id, first_name, last_name, registered_at, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            self.execute_query(insert_query, (
-                user_data['user_id'],
-                user_data.get('first_name'),
-                user_data.get('last_name')
-            ), fetch=False)
-            logger.info(f"Создан новый пользователь {user_data['user_id']}")
-            return self.execute_query(check_query, (user_data['user_id'],))[0]
-
-    def save_certificate_order(self, user_id: int, student_full_name: str, certificate_type: str, student_message: str = None) -> int:
-        """Сохранить заказ справки"""
-        query = """
-        INSERT INTO certificate_orders (user_id, student_full_name, certificate_type, student_message, status)
-        VALUES (?, ?, ?, ?, 'new')
-        """
-        result = self.execute_query(query, (user_id, student_full_name, certificate_type, student_message))
-        return result['lastrowid'] if result else None
-
-    def get_orders_by_status(self, status: str = 'new') -> List[Dict]:
-        """Получить заказы по статусу"""
-        query = """
-        SELECT * FROM certificate_orders 
-        WHERE status = ? 
-        ORDER BY order_date DESC
-        """
-        return self.execute_query(query, (status,))
-
-    def update_order_status(self, order_id: int, status: str, admin_comment: str = None):
-        """Обновить статус заказа"""
-        query = """
-        UPDATE certificate_orders 
-        SET status = ?, processed_date = CURRENT_TIMESTAMP, admin_comment = ?
-        WHERE order_id = ?
-        """
-        self.execute_query(query, (status, admin_comment, order_id), fetch=False)
-
-    def get_types_of_specialties(self) -> List[Dict]:
-        query = "SELECT * FROM types_of_specialties ORDER BY priority, name"
-        return self.execute_query(query)
-
-    def get_specialties_by_type(self, type_id: int) -> List[Dict]:
-        query = """
-        SELECT s.*, t.name as type_name
-        FROM specialties s
-        LEFT JOIN types_of_specialties t ON s.tos_id = t.tos_id
-        WHERE s.tos_id = ?
-        ORDER BY s.code
-        """
-        return self.execute_query(query, (type_id,))
-
-    def get_documents(self) -> List[Dict]:
-        query = "SELECT * FROM documents ORDER BY priority, name"
-        return self.execute_query(query)
-
-    def get_dormitory_prices(self) -> List[Dict]:
-        query = "SELECT * FROM dormitory ORDER BY price_per_month"
-        return self.execute_query(query)
-
-    def get_dormitory_addresses(self) -> List[Dict]:
-        query = "SELECT address_id, address, phone_number FROM dormitory_addresses ORDER BY address"
-        return self.execute_query(query)
-
-    def get_educators_by_address(self) -> Dict[str, List[Dict]]:
-        query = """
-        SELECT e.*, p.name as position_name, da.address as dormitory_address, da.phone_number as dormitory_phone
-        FROM educators e
-        LEFT JOIN positions p ON e.position_id = p.position_id
-        LEFT JOIN dormitory_addresses da ON e.address_id = da.address_id
-        WHERE da.address IS NOT NULL
-        ORDER BY da.address, p.name, e.full_name
-        """
-        educators = self.execute_query(query)
-        grouped = {}
-        for educator in educators:
-            if educator:
-                address = educator.get('dormitory_address')
-                if address is None:
-                    address = 'Не указан адрес'
-                if address not in grouped:
-                    grouped[address] = []
-                grouped[address].append(educator)
-        return grouped
-
-    def get_important_dates(self, limit: int = 20) -> List[Dict]:
-        query = "SELECT * FROM important_dates ORDER BY date_value LIMIT ?"
-        return self.execute_query(query, (limit,))
-
-    def get_contacts(self) -> List[Dict]:
-        query = "SELECT * FROM contacts ORDER BY priority"
-        return self.execute_query(query)
-
-    def get_link_type_by_name(self, type_name: str) -> Optional[Dict]:
-        query = "SELECT * FROM link_types WHERE name = ?"
-        result = self.execute_query(query, (type_name,))
-        return result[0] if result else None
-
-    def get_links_by_type_id(self, type_id: int) -> List[Dict]:
-        query = """
-        SELECT l.*, lt.name as type_name
-        FROM links l
-        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        WHERE l.link_type_id = ?
-        ORDER BY l.name
-        """
-        return self.execute_query(query, (type_id,))
-
-    def get_links_by_type_name(self, type_name: str) -> List[Dict]:
-        query = """
-        SELECT l.*, lt.name as type_name
-        FROM links l
-        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        WHERE lt.name = ?
-        ORDER BY l.name
-        """
-        return self.execute_query(query, (type_name,))
-
-    def get_all_links(self) -> List[Dict]:
-        query = """
-        SELECT l.*, lt.name as type_name
-        FROM links l
-        LEFT JOIN link_types lt ON l.link_type_id = lt.link_type_id
-        ORDER BY lt.name, l.name
-        """
-        return self.execute_query(query)
-
-    def get_sports_activities(self) -> List[Dict]:
-        query = """
-        SELECT sa.sa_id, sa.name, sa.venue_id, v.name as venue_name 
-        FROM sports_activities sa
-        LEFT JOIN venues v ON sa.venue_id = v.venue_id
-        ORDER BY sa.name
-        """
-        return self.execute_query(query)
-
-    def get_venues(self) -> List[Dict]:
-        query = "SELECT venue_id, name FROM venues ORDER BY name"
-        return self.execute_query(query)
-
-    def get_activities_by_venue(self) -> Dict[str, List[Dict]]:
-        activities = self.get_sports_activities()
-        grouped = {}
-        for activity in activities:
-            venue_name = activity.get('venue_name', 'Без площадки')
-            if venue_name not in grouped:
-                grouped[venue_name] = []
-            grouped[venue_name].append(activity)
-        return grouped
-
-    def close(self):
-        if self.connection:
-            self.connection.close()
-            logger.info("Соединение с БД закрыто")
-
-class AdmissionsBot:
-    def __init__(self, token: str, db: Database, admin_ids: List[int], config: Config):
-        self.bot = Bot(token=token)
-        self.db = db
-        self.admin_ids = admin_ids
-        self.config = config
-        self.dp = Dispatcher()
-        self.user_states = {}  # Для хранения состояний пользователей
-        self.register_handlers()
-
-    def register_handlers(self):
-        @self.dp.bot_started()
-        async def on_bot_started(event: BotStarted):
-            await self.handle_bot_started(event)
-        @self.dp.message_created(Command('start'))
-        async def on_start(event: MessageCreated):
-            await self.handle_start(event)
-        @self.dp.message_created(Command('admin'))
-        async def on_admin(event: MessageCreated):
-            await self.handle_admin(event)
-        @self.dp.callback_query()
-        async def on_callback(event: CallbackQuery):
-            await self.handle_callback(event)
-        @self.dp.message_created()
-        async def on_message(event: MessageCreated):
-            await self.handle_message(event)
-
-    async def handle_bot_started(self, event: BotStarted):
-        await event.bot.send_message(
-            chat_id=event.chat_id,
-            text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы."
-        )
-
-    async def handle_start(self, event: MessageCreated):
-        """Обработчик команды /start"""
-        user_data = {
-            'user_id': event.message.from_user.id,
-            'first_name': event.message.from_user.first_name,
-            'last_name': event.message.from_user.last_name
-        }
-        self.db.get_or_create_user(user_data)
-        await self.show_main_menu(event)
-
-    async def handle_admin(self, event: MessageCreated):
-        """Обработчик команды /admin - показывает новые заказы справок"""
-        if event.message.from_user.id not in self.admin_ids:
-            await event.message.answer("⛔ У вас нет прав администратора.")
-            return
-        
-        new_orders = self.db.get_orders_by_status('new')
-        
-        if not new_orders:
-            text = "📋 *Нет новых заказов справок*"
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "📜 Посмотреть обработанные", "callback_data": "admin_processed_orders"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        else:
-            text = f"📋 *Новые заказы справок:* ({len(new_orders)})\n\n"
-            for order in new_orders:
-                text += f"*Заказ #{order['order_id']}*\n"
-                text += f"👤 Студент: {order['student_full_name']}\n"
-                text += f"📄 Тип справки: {order['certificate_type']}\n"
-                if order.get('student_message'):
-                    text += f"💬 Сообщение: {order['student_message']}\n"
-                text += f"🕐 Создан: {order['order_date']}\n"
-                text += f"➖➖➖➖➖➖➖➖➖\n"
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "✅ Отметить как выполненные", "callback_data": "admin_mark_processed"}],
-                    [{"text": "📜 Посмотреть обработанные", "callback_data": "admin_processed_orders"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        
-        await event.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def handle_message(self, event: MessageCreated):
-        """Обработка текстовых сообщений (для заказа справок)"""
-        user_id = event.message.from_user.id
-        text = event.message.text
-        
-        if user_id in self.user_states:
-            state = self.user_states[user_id]
-            
-            if state['action'] == 'waiting_full_name':
-                self.user_states[user_id]['full_name'] = text
-                self.user_states[user_id]['action'] = 'waiting_certificate_type'
-                
-                keyboard = {
-                    "inline_keyboard": [
-                        [{"text": "📄 Справка об обучении", "callback_data": "cert_type_обучении"}],
-                        [{"text": "📊 Академическая справка", "callback_data": "cert_type_академическая"}],
-                        [{"text": "💳 Справка для социальной стипендии", "callback_data": "cert_type_социальная"}],
-                        [{"text": "🏥 Справка о состоянии здоровья", "callback_data": "cert_type_здоровье"}],
-                        [{"text": "📝 Другая справка", "callback_data": "cert_type_другая"}],
-                        [{"text": "🔙 Отмена", "callback_data": "cancel_order"}]
-                    ]
-                }
-                await event.message.answer("📋 *Выберите тип справки:*", parse_mode="Markdown", reply_markup=keyboard)
-                
-            elif state['action'] == 'waiting_other_certificate':
-                student_message = text
-                await self.save_and_notify_order(
-                    event, 
-                    state['full_name'], 
-                    "Другая справка", 
-                    student_message
-                )
-                del self.user_states[user_id]
-        
-        elif text.startswith('/'):
-            pass
-
-    async def save_and_notify_order(self, event: MessageCreated, full_name: str, certificate_type: str, student_message: str = None):
-        """Сохранить заказ и уведомить администраторов"""
-        user_id = event.message.from_user.id
-        
-        order_id = self.db.save_certificate_order(user_id, full_name, certificate_type, student_message)
-        
-        if order_id:
-            response_text = f"✅ *Заказ справки принят!*\n\n"
-            response_text += f"Номер заказа: #{order_id}\n"
-            response_text += f"Тип справки: {certificate_type}\n"
-            if student_message:
-                response_text += f"Ваше сообщение: {student_message}\n\n"
-            response_text += f"Ожидайте, администратор свяжется с вами."
-            
-            await event.message.answer(response_text, parse_mode="Markdown")
-            
-            for admin_id in self.admin_ids:
-                try:
-                    admin_text = f"🔔 *Новый заказ справки!*\n\n"
-                    admin_text += f"*Заказ #{order_id}*\n"
-                    admin_text += f"👤 Студент: {full_name}\n"
-                    admin_text += f"📱 ID: {user_id}\n"
-                    admin_text += f"📄 Тип справки: {certificate_type}\n"
-                    if student_message:
-                        admin_text += f"💬 Сообщение: {student_message}\n"
-                    admin_text += f"🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-                    admin_text += f"Используйте /admin для просмотра всех заказов"
-                    
-                    await event.bot.send_message(
-                        chat_id=admin_id,
-                        text=admin_text,
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
-        else:
-            await event.message.answer("❌ Произошла ошибка при оформлении заказа. Попробуйте позже.")
-
-    async def show_main_menu(self, event: MessageCreated = None, callback_query: CallbackQuery = None):
-        text = """
-*Добро пожаловать в бот приемной комиссии!*
-
-Здесь вы найдете всю необходимую информацию.
-
-*Выберите нужный раздел:*
-        """
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "🎓 Специальности", "callback_data": "menu_specialties"},
-                    {"text": "🏠 Общежитие", "callback_data": "menu_dormitory"}
-                ],
-                [
-                    {"text": "🕐 Расписание", "callback_data": "menu_schedule"},
-                    {"text": "📞 Контакты", "callback_data": "menu_contacts"}
-                ],
-                [{"text": "📅 Важные даты", "callback_data": "menu_dates"}],
-                [{"text": "📜 Правила и уставы", "callback_data": "menu_rules"}],
-                [{"text": "❓ Абитуриентам", "callback_data": "menu_become_student"}],
-                [{"text": "⚽ Внеурочные активности", "callback_data": "menu_activities"}],
-                [{"text": "📄 Заказать справку", "callback_data": "menu_order_certificate"}]
-            ]
-        }
-        if callback_query:
-            await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-        else:
-            await event.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def start_certificate_order(self, callback_query: CallbackQuery):
-        """Начать процесс заказа справки"""
-        user_id = callback_query.from_user.id
-        
-        self.user_states[user_id] = {
-            'action': 'waiting_full_name',
-            'chat_id': callback_query.message.chat.id
-        }
-        
-        text = """
-📄 *Заказ справки*
-
-Пожалуйста, отправьте ваше *полное ФИО* в следующем формате:
-
-`Иванов Иван Иванович`
-
-Или укажите данные, как в студенческом билете.
-        """
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🔙 Отмена", "callback_data": "cancel_order"}]
-            ]
-        }
-        
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def cancel_order(self, callback_query: CallbackQuery):
-        """Отменить заказ справки"""
-        user_id = callback_query.from_user.id
-        if user_id in self.user_states:
-            del self.user_states[user_id]
-        
-        await callback_query.message.edit_text("❌ Заказ справки отменен.")
-        await asyncio.sleep(2)
-        await self.show_main_menu(callback_query=callback_query)
-
-    async def select_certificate_type(self, callback_query: CallbackQuery, cert_type: str):
-        """Выбор типа справки"""
-        user_id = callback_query.from_user.id
-        
-        if user_id not in self.user_states or self.user_states[user_id]['action'] != 'waiting_certificate_type':
-            await callback_query.answer("Пожалуйста, начните заказ заново", show_alert=True)
-            await self.start_certificate_order(callback_query)
-            return
-        
-        full_name = self.user_states[user_id]['full_name']
-        
-        if cert_type == "другая":
-            self.user_states[user_id]['action'] = 'waiting_other_certificate'
-            text = "Пожалуйста, напишите, какая именно справка вам нужна:"
-            await callback_query.message.edit_text(text, parse_mode="Markdown")
-        else:
-            certificate_type_map = {
-                "обучении": "Справка об обучении",
-                "академическая": "Академическая справка",
-                "социальная": "Справка для социальной стипендии",
-                "здоровье": "Справка о состоянии здоровья"
-            }
-            certificate_type = certificate_type_map.get(cert_type, cert_type)
-            
-            class FakeMessage:
-                def __init__(self, from_user, answer_func):
-                    self.from_user = from_user
-                    self.answer = answer_func
-            
-            class FakeEvent:
-                def __init__(self, message, bot):
-                    self.message = message
-                    self.bot = bot
-            
-            fake_message = FakeMessage(callback_query.from_user, callback_query.message.edit_text)
-            fake_event = FakeEvent(fake_message, callback_query.bot)
-            
-            await self.save_and_notify_order(fake_event, full_name, certificate_type)
-            del self.user_states[user_id]
-            await asyncio.sleep(3)
-            await self.show_main_menu(callback_query=callback_query)
-
-    async def show_processed_orders(self, callback_query: CallbackQuery):
-        """Показать обработанные заказы (только для админов)"""
-        if callback_query.from_user.id not in self.admin_ids:
-            await callback_query.answer("⛔ У вас нет прав администратора.", show_alert=True)
-            return
-        
-        processed_orders = self.db.get_orders_by_status('processed')
-        
-        if not processed_orders:
-            text = "📋 *Нет обработанных заказов*"
-        else:
-            text = f"📋 *Обработанные заказы:* ({len(processed_orders)})\n\n"
-            for order in processed_orders[:10]:
-                text += f"*Заказ #{order['order_id']}*\n"
-                text += f"👤 Студент: {order['student_full_name']}\n"
-                text += f"📄 Тип справки: {order['certificate_type']}\n"
-                if order.get('student_message'):
-                    text += f"💬 Сообщение: {order['student_message']}\n"
-                text += f"✅ Обработан: {order['processed_date']}\n"
-                if order.get('admin_comment'):
-                    text += f"💬 Комментарий: {order['admin_comment']}\n"
-                text += f"➖➖➖➖➖➖➖➖➖\n"
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🔄 Обновить", "callback_data": "admin_processed_orders"}],
-                [{"text": "📋 Новые заказы", "callback_data": "admin_show_orders"}],
-                [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-            ]
-        }
-        
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def mark_orders_processed(self, callback_query: CallbackQuery):
-        """Отметить все новые заказы как обработанные"""
-        if callback_query.from_user.id not in self.admin_ids:
-            await callback_query.answer("⛔ У вас нет прав администратора.", show_alert=True)
-            return
-        
-        new_orders = self.db.get_orders_by_status('new')
-        
-        if not new_orders:
-            await callback_query.answer("Нет новых заказов для обработки", show_alert=True)
-            return
-        
-        for order in new_orders:
-            self.db.update_order_status(order['order_id'], 'processed', 'Обработано администратором')
-        
-        await callback_query.answer(f"✅ Отмечено {len(new_orders)} заказов как обработанные", show_alert=True)
-        
-        # Обновляем админ-панель
-        class FakeEvent:
-            def __init__(self, message, from_user):
-                self.message = message
-                self.from_user = from_user
-        
-        fake_event = FakeEvent(callback_query.message, callback_query.from_user)
-        await self.handle_admin(fake_event)
-
-    async def show_admin_orders(self, callback_query: CallbackQuery):
-        """Показать новые заказы (для админов)"""
-        if callback_query.from_user.id not in self.admin_ids:
-            await callback_query.answer("⛔ У вас нет прав администратора.", show_alert=True)
-            return
-        
-        class FakeEvent:
-            def __init__(self, message, from_user):
-                self.message = message
-                self.from_user = from_user
-        
-        fake_event = FakeEvent(callback_query.message, callback_query.from_user)
-        await self.handle_admin(fake_event)
-
-    async def show_specialties_menu(self, callback_query: CallbackQuery):
-        specialties_types = self.db.get_types_of_specialties()
-        if not specialties_types:
-            text = "Типы специальностей временно недоступны."
-            keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        else:
-            text = "*Выберите тип специальности:*"
-            buttons = []
-            for type_spec in specialties_types:
-                tos_id = type_spec.get('tos_id')
-                buttons.append([{"text": type_spec['name'], "callback_data": f"type_{tos_id}"}])
-            buttons.append([{"text": "🔙 Назад", "callback_data": "main_menu"}])
-            keyboard = {"inline_keyboard": buttons}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_specialties_by_type(self, callback_query: CallbackQuery, type_id: int):
-        specialties = self.db.get_specialties_by_type(type_id)
-        spec_types = self.db.get_types_of_specialties()
-        spec_type = next((t for t in spec_types if t.get('tos_id') == type_id), None)
-        if not specialties:
-            type_name = spec_type['name'] if spec_type else "Тип"
-            type_name_escaped = self.escape_markdown(type_name)
-            text = f"📚 *{type_name_escaped}*\n\nСпециальности временно недоступны."
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔙 Назад к типам", "callback_data": "menu_specialties"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        else:
-            type_name = spec_type['name'] if spec_type else "Специальности"
-            type_name_escaped = self.escape_markdown(type_name)
-            text = f"- *{type_name_escaped}*\n\n"
-            for spec in specialties:
-                spec_name = self.escape_markdown(spec['name'])
-                text += f"*{spec['code']} - {spec_name}*\n"
-                description = spec.get('description', '')
-                if description:
-                    text += f"- {self.escape_markdown(description)}\n"
-                if spec.get('duration_years'):
-                    months = int(spec['duration_years'])
-                    years = months // 12
-                    remaining_months = months % 12
-                    if years > 0:
-                        text += f"- *Срок обучения:* {years} год"
-                        if remaining_months > 0:
-                            text += f" {remaining_months} мес"
-                        text += "\n"
-                    elif remaining_months > 0:
-                        text += f"- *Срок обучения:* {remaining_months} мес\n"
-                if spec.get('budget_places'):
-                    text += f"- *Бюджетных мест:* {spec['budget_places']}\n"
-                if spec.get('paid_places'):
-                    text += f"- *Платных мест:* {spec['paid_places']}\n"
-                if spec.get('price_per_year'):
-                    text += f"- *Стоимость за год обучения:* {spec['price_per_year']} руб.\n"
-                text += "\n"
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔙 Назад к типам", "callback_data": "menu_specialties"}],
-                    [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
-                ]
-            }
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_dormitory_menu(self, callback_query: CallbackQuery):
-        dormitory_prices = self.db.get_dormitory_prices()
-        educators_by_address = self.db.get_educators_by_address()
-        dormitory_addresses = self.db.get_dormitory_addresses()
-        text = "*Информация об общежитии:*\n\n"
-        if dormitory_prices:
-            text += "Для иногородних студентов мы предоставляем место в общежитии.\n\n*Стоимость проживания:*\n\n"
-            for price in dormitory_prices:
-                type_places = price.get('type_places', 'Не указано')
-                text += f"*{self.escape_markdown(type_places)}*\n"
-                price_val = price.get('price_per_month', 0)
-                if price_val:
-                    text += f"- {price_val} руб./месяц\n\n"
-                else:
-                    text += f"- Цена не указана\n\n"
-        if dormitory_addresses:
-            text += "\n*Адреса общежитий:*\n\n"
-            for address_info in dormitory_addresses:
-                address = address_info.get('address', 'Адрес не указан')
-                phone_number = address_info.get('phone_number', '')
-                text += f"- *{self.escape_markdown(address)}*\n"
-                if phone_number:
-                    text += f"  — Телефон: {phone_number}\n"
-                text += "\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_schedule_menu(self, callback_query: CallbackQuery):
-        text = self.config.bell_schedule
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_contacts_menu(self, callback_query: CallbackQuery):
-        contacts = self.db.get_contacts()
-        text = "*Контактная информация:*\n\n"
-        if contacts:
-            for i, contact in enumerate(contacts, 1):
-                text += f"*Филиал {i}:*\n"
-                if contact.get('phone'):
-                    text += f"- *Телефон:* {contact['phone']}\n"
-                if contact.get('email'):
-                    text += f"- *Email:* {contact['email']}\n"
-                if contact.get('address'):
-                    text += f"- *Адрес:* {self.escape_markdown(contact['address'])}\n"
-                if contact.get('working_hours'):
-                    text += f"- *Часы работы:*\n{contact['working_hours']}\n"
-                text += "\n"
-        else:
-            text += "Контакты временно недоступны.\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_dates_menu(self, callback_query: CallbackQuery):
-        dates = self.db.get_important_dates()
-        if not dates:
-            text = "На данный момент нет актуальных дат."
-        else:
-            text = "*Важные даты:*\n\n"
-            for date_item in dates:
-                date_value = date_item.get('date_value')
-                if date_value:
-                    date_str = date_value if isinstance(date_value, str) else datetime.strptime(date_value, '%Y-%m-%d').strftime("%d.%m.%Y")
-                else:
-                    date_str = "Дата не указана"
-                text += f"- *{date_item['title']}*\n"
-                text += f"Запланированно на {date_str}\n"
-                if date_item.get('description'):
-                    text += f"Ссылка: {date_item['description']}\n"
-                text += "\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_rules_menu(self, callback_query: CallbackQuery):
-        """Показать правила и уставы (ссылки)"""
-        all_links = self.db.get_all_links()
-        
-        if not all_links:
-            text = "📜 *Правила и уставы*\n\nНа данный момент нет доступных документов."
-        else:
-            text = "*📜 Правила и уставы:*\n\n"
-            rules_links = []
-            statutes_links = []
-            other_links = []
-            for link in all_links:
-                link_type = link.get('type_name', '').lower()
-                if link_type == 'rules':
-                    rules_links.append(link)
-                elif link_type == 'statutes':
-                    statutes_links.append(link)
-                else:
-                    other_links.append(link)
-            if rules_links:
-                text += "*Правила:*\n"
-                for link in rules_links:
-                    link_name = self.escape_markdown(link['name'])
-                    link_url = link['url']
-                    text += f"• [{link_name}]({link_url})\n"
-                text += "\n"
-            if statutes_links:
-                text += "*Уставы:*\n"
-                for link in statutes_links:
-                    link_name = self.escape_markdown(link['name'])
-                    link_url = link['url']
-                    text += f"• [{link_name}]({link_url})\n"
-                text += "\n"
-            if other_links:
-                text += "*Другие документы:*\n"
-                for link in other_links:
-                    link_name = self.escape_markdown(link['name'])
-                    link_url = link['url']
-                    text += f"• [{link_name}]({link_url})\n"
-                text += "\n"
-        
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True)
-
-    async def show_become_student_menu(self, callback_query: CallbackQuery):
-        documents = self.db.get_documents()
-        contacts = self.db.get_contacts()
-        text = "*Как стать студентом?*\n"
-        if documents:
-            text += "\n*Необходимые документы:*\n"
-            for doc in documents:
-                doc_name = self.escape_markdown(doc['name'])
-                text += f"*{doc_name}*\n"
-                if doc.get('description'):
-                    text += f"ℹ️ {self.escape_markdown(doc['description'])}\n"
-                is_required = doc.get('is_required', True)
-                required_text = "Обязательный" if is_required else "Дополнительный"
-                text += f"   - {required_text}\n\n"
-        if contacts:
-            text += "\n*Для подачи документов обращайтесь:*\n"
-            for contact in contacts:
-                if contact.get('address'):
-                    text += f"- {self.escape_markdown(contact['address'])}\n"
-                if contact.get('phone'):
-                    text += f"- {contact['phone']}\n"
-                if contact.get('working_hours'):
-                    text += f"- {contact['working_hours']}\n\n"
-        text += "\n*До встречи, будущий студент!*"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    async def show_activities_menu(self, callback_query: CallbackQuery):
-        activities_by_venue = self.db.get_activities_by_venue()
-        if not activities_by_venue:
-            text = "*Внеурочные активности*\n\nНа данный момент информация о внеурочных активностях недоступна."
-        else:
-            text = "*Внеурочные активности для студентов:*\n\n"
-            for venue_name, activities in activities_by_venue.items():
-                venue_name_escaped = self.escape_markdown(venue_name)
-                text += f"*- {venue_name_escaped}*\n"
-                if activities:
-                    for activity in activities:
-                        activity_name = self.escape_markdown(activity['name'])
-                        text += f"  • {activity_name}\n"
-                else:
-                    text += "  • На этой площадке пока нет активностей\n"
-                text += "\n"
-        keyboard = {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "main_menu"}]]}
-        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
-
-    def escape_markdown(self, text: str) -> str:
-        if not text:
-            return ""
-        escape_chars = ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-        for char in escape_chars:
-            text = text.replace(char, f'\\{char}')
-        return text
-
-    async def handle_callback(self, event: CallbackQuery):
-        data = event.data
-        try:
-            if data == "main_menu":
-                await self.show_main_menu(callback_query=event)
-            elif data == "menu_specialties":
-                await self.show_specialties_menu(event)
-            elif data == "menu_dormitory":
-                await self.show_dormitory_menu(event)
-            elif data == "menu_schedule":
-                await self.show_schedule_menu(event)
-            elif data == "menu_contacts":
-                await self.show_contacts_menu(event)
-            elif data == "menu_dates":
-                await self.show_dates_menu(event)
-            elif data == "menu_rules":
-                await self.show_rules_menu(event)
-            elif data == "menu_become_student":
-                await self.show_become_student_menu(event)
-            elif data == "menu_activities":
-                await self.show_activities_menu(event)
-            elif data == "menu_order_certificate":
-                await self.start_certificate_order(event)
-            elif data == "cancel_order":
-                await self.cancel_order(event)
-            elif data.startswith("cert_type_"):
-                cert_type = data.split("_")[2]
-                await self.select_certificate_type(event, cert_type)
-            elif data.startswith("type_"):
-                type_id = int(data.split("_")[1])
-                await self.show_specialties_by_type(event, type_id)
-            elif data == "admin_show_orders":
-                await self.show_admin_orders(event)
-            elif data == "admin_processed_orders":
-                await self.show_processed_orders(event)
-            elif data == "admin_mark_processed":
-                await self.mark_orders_processed(event)
-            else:
-                await event.answer("Действие не распознано", show_alert=True)
-        except Exception as e:
-            logger.error(f"Ошибка обработки callback: {e}")
-            await event.message.edit_text(
-                "❌ Произошла ошибка. Попробуйте еще раз.",
-                reply_markup={"inline_keyboard": [[{"text": "🏠 Главное меню", "callback_data": "main_menu"}]]}
-            )
-        await event.answer()
-
-    async def start(self):
-        """Запуск бота"""
-        logger.info("Запуск бота для Max...")
-        try:
-            specialties = self.db.execute_query("SELECT COUNT(*) as count FROM specialties")
-            types = self.db.get_types_of_specialties()
-            links = self.db.get_all_links()
-            specs_count = specialties[0]['count'] if specialties else 0
-            print("\n" + "=" * 30)
-            print("Бот для Max успешно запущен!")
-            print(f"Специальностей в базе: {specs_count}")
-            print(f"Типов специальностей: {len(types)}")
-            print(f"Ссылок в базе: {len(links)}")
-            print("=" * 30 + "\n")
-        except Exception as e:
-            logger.error(f"❌ Ошибка проверки БД: {e}")
-            print(f"\n❌ Ошибка подключения к БД: {e}")
-            return
-        await self.dp.start_polling(self.bot)
-
-def main():
-    print("=" * 30)
-    print("БОТ ПРИЕМНОЙ КОМИССИИ ДЛЯ MAX")
-    print("=" * 30)
-    config = Config()
-    try:
-        db = Database(config)
-        bot = AdmissionsBot(config.bot_token, db, config.admin_ids, config)
-        print("\nЗапускаю бота...")
-        asyncio.run(bot.start())
-    except Exception as e:
-        print(f"\nОШИБКА ПРИ ЗАПУСКЕ: {e}")
-        print("\nВозможные причины:")
-        print("1. Отсутствует файл базы данных admissions_bot.db")
-        print("2. Неправильный токен бота для Max")
-        print("3. Проблемы с подключением к Max API")
-    finally:
-        if 'db' in locals():
-            db.close()
+        db.close()
 
 if __name__ == "__main__":
     main()
