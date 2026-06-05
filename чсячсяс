@@ -59,6 +59,7 @@ class Database:
         self.config = config
         self.conn = sqlite3.connect(config.db_path)
         self.conn.row_factory = sqlite3.Row
+
     def get_or_create_user(self, user_id: int, first_name: str, last_name: str = ''):
         cursor = self.conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
         user = cursor.fetchone()
@@ -69,18 +70,22 @@ class Database:
             self.conn.commit()
             logger.info(f"Создан пользователь {user_id}")
         return user
+
     def save_order(self, user_id: int, full_name: str, group: str, cert_type: str, message: str = None):
         cursor = self.conn.execute(
             'INSERT INTO certificate_orders (user_id, student_full_name, student_group, certificate_type, student_message, status, order_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
             (user_id, full_name, group, cert_type, message, 'new', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         self.conn.commit()
         return cursor.lastrowid
+
     def get_new_orders(self):
         cursor = self.conn.execute('SELECT * FROM certificate_orders WHERE status = "new" ORDER BY order_date DESC')
         return cursor.fetchall()
+
     def get_types_of_specialties(self):
         cursor = self.conn.execute('SELECT tos_id, name FROM types_of_specialties ORDER BY tos_id')
         return cursor.fetchall()
+
     def get_specialties_by_type(self, type_id: int):
         cursor = self.conn.execute('''
             SELECT spec_id, code, name, description, duration_years, budget_places, paid_places, price_per_year
@@ -92,24 +97,30 @@ class Database:
     def get_contacts(self):
         cursor = self.conn.execute('SELECT contact_id, phone, email, address, working_hours, priority FROM contacts ORDER BY priority')
         return cursor.fetchall()
+
     def get_important_dates(self):
         cursor = self.conn.execute('SELECT date_id, title, date_value, description FROM important_dates ORDER BY date_value')
         return cursor.fetchall()
+
     def get_all_links(self):
         cursor = self.conn.execute('SELECT link_id, name, url, priority FROM links ORDER BY priority')
         return cursor.fetchall()
+
     def get_dormitory_prices(self):
         cursor = self.conn.execute('SELECT dorm_id, type_places, price_per_month FROM dormitory ORDER BY price_per_month')
         return cursor.fetchall()
+
     def get_documents(self):
         cursor = self.conn.execute('SELECT doc_id, name, description, is_required, priority FROM documents ORDER BY priority')
         return cursor.fetchall()
+
     def get_sports_activities(self):
         cursor = self.conn.execute('''
             SELECT sa_id, name, venue_id, description, schedule
             FROM sports_activities 
             ORDER BY name''')
         return cursor.fetchall()
+
     def close(self):
         self.conn.close()
 
@@ -123,6 +134,7 @@ class AdmissionsBot:
         self.user_states = {}
         self.user_menu_state = {}
         self.register_handlers()
+
     def register_handlers(self):
         @self.dp.bot_started()
         async def on_started(event: BotStarted):
