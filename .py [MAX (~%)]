@@ -20,12 +20,13 @@ class Config:
         self.bot_token = ''
         self.admin_ids = []
 
+
 class Database:
     def __init__(self, config: Config):
         self.config = config
         self.conn = sqlite3.connect(config.db_path)
         self.conn.row_factory = sqlite3.Row
-    
+        
     def get_schedule_by_day(self, weekday_name: str):
         cursor = self.conn.execute('''
             SELECT s.lesson_number, s.start_time, s.end_time
@@ -33,7 +34,8 @@ class Database:
             JOIN weekdays w ON w.id = wtm.weekday_id
             JOIN schedule s ON s.template_id = wtm.template_id
             WHERE w.name = ?
-            ORDER BY s.lesson_number''', (weekday_name,))
+            ORDER BY s.lesson_number
+        ''', (weekday_name,))
         return cursor.fetchall()
 
     def get_events_by_day(self, weekday_name: str):
@@ -43,52 +45,65 @@ class Database:
             JOIN weekdays w ON w.id = wtm.weekday_id
             JOIN events e ON e.template_id = wtm.template_id
             WHERE w.name = ?
-            ORDER BY e.start_time''', (weekday_name,))
+            ORDER BY e.start_time
+        ''', (weekday_name,))
         return cursor.fetchall()
 
     def get_educational_practice(self):
         cursor = self.conn.execute('''
             SELECT shift_number, start_time, end_time
             FROM educational_practice
-            ORDER BY shift_number''')
+            ORDER BY shift_number
+        ''')
         return cursor.fetchall()
 
-    def get_schedule_link(self):
+    def get_links_by_category(self, category: str):
         cursor = self.conn.execute('''
-            SELECT name, url FROM links 
-            WHERE name LIKE '%расписани%' OR name LIKE '%schedule%'
-            ORDER BY priority LIMIT 1''')
-        return cursor.fetchone()
+            SELECT link_id, name, url, priority 
+            FROM links 
+            WHERE category = ?
+            ORDER BY priority, link_id
+        ''', (category,))
+        return cursor.fetchall()
 
-    def format_full_schedule(self, weekday_name: str) -> str:
-        weekday_ru = {'monday': 'ПОНЕДЕЛЬНИК', 'tuesday': 'ВТОРНИК', 'wednesday': 'СРЕДА', 'thursday': 'ЧЕТВЕРГ',
-        'friday': 'ПЯТНИЦА', 'saturday': 'СУББОТА' }.get(weekday_name, weekday_name.upper())
-        lessons = self.get_schedule_by_day(weekday_name)
-        events = self.get_events_by_day(weekday_name)
-        if not lessons and not events:
-            return f"🕐 РАСПИСАНИЕ\n\n{weekday_ru}:\nВременно недоступно"
-        text = f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n{weekday_ru}:\n"
-        for event in events:
-            text += f"{event['name']}: {event['start_time']} - {event['end_time']}\n"
-        for lesson in lessons:
-            text += f"{lesson['lesson_number']} урок: {lesson['start_time']} - {lesson['end_time']}\n"
-        return text
-
-    def format_educational_practice(self) -> str:
-        practice = self.get_educational_practice()
-        if not practice:
-            return "УЧЕБНАЯ ПРАКТИКА:\nИнформация временно недоступна"
-        text = "УЧЕБНАЯ ПРАКТИКА:\n"
-        for p in practice:
-            text += f"{p['shift_number']} смена: {p['start_time']} - {p['end_time']}\n"
-        return text
-
+    def format_schedule_with_links(self, weekday_name: str = None) -> str:
+        """Сформировать расписание звонков"""
+        if weekday_name:
+            weekday_ru = {
+                'monday': 'ПОНЕДЕЛЬНИК', 'tuesday': 'ВТОРНИК',
+                'wednesday': 'СРЕДА', 'thursday': 'ЧЕТВЕРГ',
+                'friday': 'ПЯТНИЦА', 'saturday': 'СУББОТА'
+            }.get(weekday_name, weekday_name.upper())
+            
+            lessons = self.get_schedule_by_day(weekday_name)
+            events = self.get_events_by_day(weekday_name)
+            
+            if not lessons and not events:
+                return f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n{weekday_ru}:\nВременно недоступно"
+            
+            text = f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n📅 {weekday_ru}:\n\n"
+            for event in events:
+                text += f"⏰ {event['name']}: {event['start_time']} - {event['end_time']}\n"
+            for lesson in lessons:
+                text += f"📚 {lesson['lesson_number']} урок: {lesson['start_time']} - {lesson['end_time']}\n"
+            return text
+        else:
+            # Расписание учебной практики
+            practice = self.get_educational_practice()
+            if not practice:
+                return "УЧЕБНАЯ ПРАКТИКА:\nИнформация временно недоступна"
+            text = "📚 УЧЕБНАЯ ПРАКТИКА:\n\n"
+            for p in practice:
+                text += f"⏰ {p['shift_number']} смена: {p['start_time']} - {p['end_time']}\n"
+            return text
+    
     def get_or_create_user(self, user_id: int, first_name: str, last_name: str = ''):
         cursor = self.conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
         user = cursor.fetchone()
         if not user:
             self.conn.execute(
-                'INSERT INTO users (user_id, first_name, last_name) VALUES (?, ?, ?)', (user_id, first_name, last_name))
+                'INSERT INTO users (user_id, first_name, last_name) VALUES (?, ?, ?)',
+                (user_id, first_name, last_name))
             self.conn.commit()
         return user
 
@@ -105,14 +120,16 @@ class Database:
     def get_orders_by_status(self, status: str = None):
         if status:
             cursor = self.conn.execute(
-                'SELECT * FROM certificate_orders WHERE status = ? ORDER BY order_date DESC', (status,))
+                'SELECT * FROM certificate_orders WHERE status = ? ORDER BY order_date DESC', 
+                (status,))
         else:
             cursor = self.conn.execute('SELECT * FROM certificate_orders ORDER BY order_date DESC')
         return cursor.fetchall()
     
     def get_user_orders(self, user_id: int):
         cursor = self.conn.execute(
-            'SELECT * FROM certificate_orders WHERE user_id = ? ORDER BY order_date DESC', (user_id,))
+            'SELECT * FROM certificate_orders WHERE user_id = ? ORDER BY order_date DESC', 
+            (user_id,))
         return cursor.fetchall()
     
     def get_order_by_id(self, order_id: int):
@@ -138,57 +155,59 @@ class Database:
         cursor = self.conn.execute('''
             SELECT status, COUNT(*) as count 
             FROM certificate_orders 
-            GROUP BY status''')
+            GROUP BY status
+        ''')
         return {row['status']: row['count'] for row in cursor.fetchall()}
     
     def delete_order(self, order_id: int):
         cursor = self.conn.execute('DELETE FROM certificate_orders WHERE order_id = ?', (order_id,))
         self.conn.commit()
         return cursor.rowcount > 0
-
+    
     def get_types_of_specialties(self):
         cursor = self.conn.execute('SELECT tos_id, name FROM types_of_specialties ORDER BY tos_id')
         return cursor.fetchall()
 
     def get_specialties_by_type(self, type_id: int):
         cursor = self.conn.execute('''
-            SELECT spec_id, code, name, description, duration_years, budget_places, paid_places, price_per_year
+            SELECT spec_id, code, name, description, duration_years, 
+                   budget_places, paid_places, price_per_year
             FROM specialties WHERE tos_id = ? ORDER BY code''', (type_id,))
         return cursor.fetchall()
 
     def get_contacts(self):
         cursor = self.conn.execute('''
             SELECT contact_id, phone, email, address, working_hours, priority 
-            FROM contacts ORDER BY priority''')
+            FROM contacts ORDER BY priority
+        ''')
         return cursor.fetchall()
 
     def get_important_dates(self):
         cursor = self.conn.execute('''
             SELECT date_id, title, date_value, description 
-            FROM important_dates ORDER BY date_value''')
-        return cursor.fetchall()
-
-    def get_all_links(self):
-        cursor = self.conn.execute('''
-            SELECT link_id, name, url, priority FROM links ORDER BY priority''')
+            FROM important_dates ORDER BY date_value
+        ''')
         return cursor.fetchall()
 
     def get_dormitory_prices(self):
         cursor = self.conn.execute('''
             SELECT dorm_id, type_places, price_per_month 
-            FROM dormitory ORDER BY price_per_month''')
+            FROM dormitory ORDER BY price_per_month
+        ''')
         return cursor.fetchall()
 
     def get_documents(self):
         cursor = self.conn.execute('''
             SELECT doc_id, name, description, is_required, priority 
-            FROM documents ORDER BY priority''')
+            FROM documents ORDER BY priority
+        ''')
         return cursor.fetchall()
 
     def get_sports_activities(self):
         cursor = self.conn.execute('''
             SELECT sa_id, name, venue_id, description, schedule
-            FROM sports_activities ORDER BY name''')
+            FROM sports_activities ORDER BY name
+        ''')
         return cursor.fetchall()
 
     def close(self):
@@ -201,12 +220,12 @@ class AdmissionsBot:
     STATUS_READY = 'ready'
     STATUS_COMPLETED = 'completed'
     STATUS_CANCELLED = 'cancelled'
+    
     STATUS_DISPLAY = {
-        'new': 'Новый',
-        'in_progress': 'В работе',
-        'ready': 'Готов к выдаче',
-        'completed': 'Выдан',
-        'cancelled': 'Отменен'}
+        'new': '🟡 Новый',
+        'in_progress': '🔵 В работе',
+        'ready': '🟢 Готов к выдаче',
+        'completed': '✅ Выдан'}
     
     def __init__(self, token: str, db: Database, admin_ids: list, config: Config):
         self.bot = Bot(token=token)
@@ -224,6 +243,7 @@ class AdmissionsBot:
             await event.bot.send_message(
                 chat_id=event.chat_id,
                 text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы.")
+
         @self.dp.message_created(Command('start'))
         async def on_start(event: MessageCreated):
             user_id = event.message.sender.user_id
@@ -232,26 +252,32 @@ class AdmissionsBot:
             self.db.get_or_create_user(user_id, first_name, last_name)
             self.user_menu_state[user_id] = 'main'
             await self.show_main_menu(event)
+
         @self.dp.message_created(Command('admin'))
         async def on_admin(event: MessageCreated):
             await self.handle_admin_panel(event)
+            
         @self.dp.message_created(Command('my_orders'))
         async def on_my_orders(event: MessageCreated):
             await self.show_my_orders(event)
+
         @self.dp.message_created()
         async def on_message(event: MessageCreated):
             await self.handle_message(event)
+
     async def show_main_menu(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         self.user_menu_state[user_id] = 'main'
+        
         user_orders = self.db.get_user_orders(user_id)
         orders_badge = f" ({len(user_orders)})" if user_orders else ""
+        
         text = f"""
 🏠 ГЛАВНОЕ МЕНЮ
 
 Добро пожаловать в бот ГПОУ "СПТ"!
 
-Выберите нужный раздел:
+📋 Выберите нужный раздел:
 
 1 - 🎓 Специальности
 2 - 🏠 Общежитие
@@ -262,13 +288,81 @@ class AdmissionsBot:
 7 - ❓ Абитуриентам
 8 - ⚽ Внеурочные активности
 9 - 📄 Заказать справку
-10 - 📋 Мои справки{orders_badge}
+10 - 📋 Мои заказы{orders_badge}
 
 0 - 🔙 Помощь
 
-Отправьте номер раздела:
+➡️ Отправьте номер раздела:
         """
         await event.message.answer(text)
+
+    async def show_schedule(self, event: MessageCreated):
+        """Показать расписание звонков на сегодня + ссылки на расписание"""
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'schedule_menu'
+        now = datetime.now()
+        weekday_num = now.weekday()
+        weekday_map = {0: 'monday', 1: 'tuesday', 2: 'wednesday', 
+                      3: 'thursday', 4: 'friday', 5: 'saturday', 6: None}
+        today_name = weekday_map.get(weekday_num)
+        text = ""
+        if today_name is None:
+            text += "📅 Сегодня воскресенье — учебных занятий нет!\n\n"
+        else:
+            text += self.db.format_schedule_with_links(today_name)
+            text += "\n"
+        text += self.db.format_schedule_with_links()
+        schedule_links = self.db.get_links_by_category('schedule')
+        if schedule_links:
+            text += "\n\n📎 **Ссылки на расписание:**\n"
+            for link in schedule_links:
+                text += f"• [{link['name']}]({link['url']})\n"
+        text += "\n\n📅 Чтобы посмотреть расписание на другой день, напишите:\n"
+        text += "пн, вт, ср, чт, пт, сб\n\n"
+        text += "🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text, parse_mode='Markdown')
+    
+    async def show_schedule_for_day(self, event: MessageCreated, day_ru: str):
+        day_map = {
+            'пн': 'monday', 'пн.': 'monday', 'понедельник': 'monday',
+            'вт': 'tuesday', 'вт.': 'tuesday', 'вторник': 'tuesday',
+            'ср': 'wednesday', 'ср.': 'wednesday', 'среда': 'wednesday',
+            'чт': 'thursday', 'чт.': 'thursday', 'четверг': 'thursday',
+            'пт': 'friday', 'пт.': 'friday', 'пятница': 'friday',
+            'сб': 'saturday', 'сб.': 'saturday', 'суббота': 'saturday'
+        }
+        weekday_name = day_map.get(day_ru.lower())
+        if not weekday_name:
+            await event.message.answer("❓ Напишите: пн, вт, ср, чт, пт или сб")
+            return
+        text = self.db.format_schedule_with_links(weekday_name)
+        text += f"\n\n{self.db.format_schedule_with_links()}"
+        schedule_links = self.db.get_links_by_category('schedule')
+        if schedule_links:
+            text += "\n\n📎 **Ссылки на расписание:**\n"
+            for link in schedule_links:
+                text += f"• [{link['name']}]({link['url']})\n"
+        text += "\n\n🔙 Отправьте 0 для возврата в главное меню или напишите другой день"
+        await event.message.answer(text, parse_mode='Markdown')
+
+    async def show_documents(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        documents_links = self.db.get_links_by_category('documents')
+        if not documents_links:
+            await event.message.answer(
+                "📜 ДОКУМЕНТЫ И ПРАВИЛА\n\n"
+                "Документы временно недоступны.\n\n"
+                "🔙 Отправьте 0 для возврата в главное меню"
+            )
+            return
+        text = "📜 ДОКУМЕНТЫ И ПРАВИЛА ГПОУ "СПТ"\n\n"
+        text += "Ознакомьтесь с официальными документами техникума:\n\n"
+        for link in documents_links:
+            text += f"• [{link['name']}]({link['url']})\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text, parse_mode='Markdown')
+
     async def show_admin_panel(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         if user_id not in self.admin_ids:
@@ -279,26 +373,24 @@ class AdmissionsBot:
         text = """
 👨‍💼 ПАНЕЛЬ АДМИНИСТРАТОРА
 
-Статистика заказов:
+📊 Статистика заказов справок:
 """
         for status, display in self.STATUS_DISPLAY.items():
             count = stats.get(status, 0)
             text += f"{display}: {count}\n"
-        
         text += """
 Выберите действие:
-
-1 - Новые заказы
-2 - Заказы в работе
-3 - Готовые к выдаче
-4 - Выданные заказы
-5 - Отмененные заказы
-6 - Все заказы
-7 - Найти заказ по ID
-
+1 - 🟡 Новые заказы
+2 - 🔵 Заказы в работе
+3 - 🟢 Готовые к выдаче
+4 - ✅ Выданные заказы
+5 - ❌ Отмененные заказы
+6 - 📋 Все заказы
+7 - 🔍 Найти заказ по ID
 0 - 🔙 Вернуться в главное меню
         """
         await event.message.answer(text)
+
     async def show_orders_by_status(self, event: MessageCreated, status: str):
         user_id = event.message.sender.user_id
         orders = self.db.get_orders_by_status(status)
@@ -321,25 +413,26 @@ class AdmissionsBot:
         comment = order['admin_comment'] if order['admin_comment'] else 'нет'
         text = f"""
 ═══════════════════════════
-🎫 **ЗАКАЗ #{order['order_id']}**
+🎫 ЗАКАЗ #{order['order_id']}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Студент: {order['student_full_name']}
-Группа: {group}
-Тип: {order['certificate_type']}
-Статус: {status_display}
-Сообщение: {message}
-Создан: {order['order_date']}
-Обновлен: {order['status_updated_at']}
-Комментарий: {comment}
+👤 Студент: {order['student_full_name']}
+📚 Группа: {group}
+📄 Тип: {order['certificate_type']}
+📝 Статус: {status_display}
+💬 Сообщение: {message}
+📅 Создан: {order['order_date']}
+🔄 Обновлен: {order['status_updated_at']}
+📌 Комментарий: {comment}
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Доступные действия (отправьте номер):
-1 - Взять в работу
-2 - Отметить как готовый
-3 - Отметить как выданный
-4 - Отменить заказ
-5 - Добавить комментарий
-6 - Удалить заказ
+1 - 🔵 Взять в работу
+2 - 🟢 Отметить как готовый
+3 - ✅ Отметить как выданный
+4 - ❌ Отменить заказ
+5 - 💬 Добавить комментарий
+6 - 🗑 Удалить заказ
 7 - 🔙 Назад к списку
         """
         await event.message.answer(text)
@@ -349,19 +442,21 @@ class AdmissionsBot:
             await event.message.answer("⛔ У вас нет прав администратора.")
             return
         await self.show_admin_panel(event)
+
     async def show_my_orders(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         orders = self.db.get_user_orders(user_id)
         if not orders:
             await event.message.answer(
                 "📋 У вас нет заказов справок.\n\n"
-                "Чтобы заказать справку, отправьте 9 в главном меню.")
+                "Чтобы заказать справку, отправьте 9 в главном меню."
+            )
             return
         text = f"📋 ВАШИ ЗАКАЗЫ (всего: {len(orders)})\n\n"
         for order in orders:
             status_display = self.STATUS_DISPLAY.get(order['status'], order['status'])
             text += f"""
-🎫 Заказ #{order['order_id']}
+🎫 **Заказ #{order['order_id']}**
    Тип: {order['certificate_type']}
    Статус: {status_display}
    Дата: {order['order_date']}
@@ -371,10 +466,11 @@ class AdmissionsBot:
             text += "\n"
         text += "\n🔙 Отправьте 0 для возврата в главное меню"
         await event.message.answer(text)
+
     async def update_order_status_with_notification(self, event: MessageCreated, order_id: int, new_status: str, comment: str = None):
         order = self.db.get_order_by_id(order_id)
         if not order:
-            await event.message.answer("❌ Заказ не найден.")
+            await event.message.answer("Заказ не найден.")
             return False
         success = self.db.update_order_status(order_id, new_status, comment)
         if success:
@@ -384,17 +480,18 @@ class AdmissionsBot:
                 notification_text = f"""
 📢 ИЗМЕНЕНИЕ СТАТУСА ЗАКАЗА #{order_id}
 
-Тип: {order['certificate_type']}
-Новый статус: {status_display}
-Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}
+📄 Тип: {order['certificate_type']}
+🔄 Новый статус: {status_display}
+📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}
 """
                 if comment:
                     notification_text += f"\n💬 Комментарий администратора:\n{comment}\n"
                 if new_status == self.STATUS_READY:
-                    notification_text += "\n📎 Справка готова к выдаче! Обратитесь в учебную часть."
+                    notification_text += "\n📎 Справка готова к выдаче! Обратитесь в учебный отдел."
                 await event.bot.send_message(
                     chat_id=order['user_id'],
-                    text=notification_text)
+                    text=notification_text
+                )
             except Exception as e:
                 logger.error(f"Не удалось отправить уведомление: {e}")
             return True
@@ -404,7 +501,7 @@ class AdmissionsBot:
         user_id = event.message.sender.user_id
         self.user_states[user_id] = {'step': 'waiting_name'}
         await event.message.answer(
-            "📄 ЗАКАЗ СПРАВКИ\n\n"
+            "📄 **ЗАКАЗ СПРАВКИ**\n\n"
             "Введите ваше полное ФИО:\n"
             "Пример: Иванов Иван Иванович\n\n"
             "🔙 Отправьте 0 для отмены")
@@ -419,9 +516,10 @@ class AdmissionsBot:
             self.user_states[user_id]['step'] = 'waiting_group'
             await event.message.answer(
                 "📚 Введите номер группы:\n"
-                "Пример: 414\n\n"
+                "Пример: С-21-1\n\n"
                 "🔙 Отправьте 0 для отмены")
             return
+            
         elif state['step'] == 'waiting_group':
             if text == '0':
                 del self.user_states[user_id]
@@ -430,7 +528,7 @@ class AdmissionsBot:
             self.user_states[user_id]['group'] = text
             self.user_states[user_id]['step'] = 'waiting_type'
             await event.message.answer(
-                "📄 **ВЫБЕРИТЕ ТИП СПРАВКИ:**\n\n"
+                "📄 ВЫБЕРИТЕ ТИП СПРАВКИ:\n\n"
                 "1 - Справка об обучении\n"
                 "2 - Академическая справка\n"
                 "3 - Справка о состоянии здоровья\n"
@@ -450,12 +548,13 @@ class AdmissionsBot:
                 '1': 'Справка об обучении',
                 '2': 'Академическая справка',
                 '3': 'Справка о состоянии здоровья',
-                '4': 'Справка о проживании в общежитии'}
+                '4': 'Справка о проживании в общежитии'
+            }
             cert_type = type_map.get(text, text)
             order_id = self.db.save_order(user_id, name, group, cert_type)
             del self.user_states[user_id]
             await event.message.answer(
-                f"✅ ЗАКАЗ НА СПРАВКУ #{order_id} ПРИНЯТ!\n\n"
+                f"✅ **ЗАКАЗ НА СПРАВКУ #{order_id} ПРИНЯТ!**\n\n"
                 f"👤 ФИО: {name}\n"
                 f"📚 Группа: {group}\n"
                 f"📄 Тип: {cert_type}\n\n"
@@ -506,19 +605,20 @@ class AdmissionsBot:
             await event.message.answer(f"В разделе '{type_name}' пока нет специальностей.")
             await self.show_specialties_types(event)
             return
+
         text = f"🎓 {type_name}\n\n"
         for spec in specialties:
             text += f"📌 *{spec['code']} - {spec['name']}*\n"
             if spec['description']:
-                text += f"   - {spec['description']}\n"
+                text += f"   {spec['description']}\n"
             if spec['duration_years']:
-                text += f"   - Срок обучения: {spec['duration_years']}\n"
+                text += f"   ⏰ Срок обучения: {spec['duration_years']}\n"
             if spec['budget_places']:
-                text += f"   - Бюджетных мест: {spec['budget_places']}\n"
+                text += f"   🎯 Бюджетных мест: {spec['budget_places']}\n"
             if spec['paid_places']:
-                text += f"   - Платных мест: {spec['paid_places']}\n"
+                text += f"   💰 Платных мест: {spec['paid_places']}\n"
             if spec['price_per_year']:
-                text += f"   - Стоимость: {spec['price_per_year']} руб/год\n"
+                text += f"   💵 Стоимость: {spec['price_per_year']} руб/год\n"
             text += "\n"
         text += "\n🔙 Отправьте 0 чтобы вернуться к выбору типа специальности"
         await event.message.answer(text)
@@ -534,48 +634,7 @@ class AdmissionsBot:
                 text += f"• {price['type_places']}: {price['price_per_month']} руб/мес\n"
         else:
             text += "Информация о стоимости проживания временно недоступна.\n"
-        text += "\n\n🔙 Отправьте 0 для возврата"
-        await event.message.answer(text)
-
-    async def show_schedule(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
-        self.user_menu_state[user_id] = 'schedule_menu'
-        now = datetime.now()
-        weekday_num = now.weekday()
-        weekday_map = {0: 'monday', 1: 'tuesday', 2: 'wednesday', 3: 'thursday', 4: 'friday', 5: 'saturday', 6: None}
-        today_name = weekday_map.get(weekday_num)
-        text = "🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n"
-        if today_name is None:
-            text += "Сегодня воскресенье - учебных занятий нет!\n\n"
-        else:
-            text += self.db.format_full_schedule(today_name)
-            text += "\n"
-        text += self.db.format_educational_practice()
-        schedule_link = self.db.get_schedule_link()
-        if schedule_link:
-            text += f"\n\n📎 {schedule_link['name']}: {schedule_link['url']}"
-        text += "\n\n📅 Чтобы посмотреть расписание на другой день, напишите:\n"
-        text += "пн, вт, ср, чт, пт, сб\n\n"
-        text += "🔙 Отправьте 0 для возврата"
-        await event.message.answer(text)
-    async def show_schedule_for_day(self, event: MessageCreated, day_ru: str):
-        day_map = {
-            'пн': 'monday', 'пн.': 'monday', 'понедельник': 'monday',
-            'вт': 'tuesday', 'вт.': 'tuesday', 'вторник': 'tuesday',
-            'ср': 'wednesday', 'ср.': 'wednesday', 'среда': 'wednesday',
-            'чт': 'thursday', 'чт.': 'thursday', 'четверг': 'thursday',
-            'пт': 'friday', 'пт.': 'friday', 'пятница': 'friday',
-            'сб': 'saturday', 'сб.': 'saturday', 'суббота': 'saturday'}
-        weekday_name = day_map.get(day_ru.lower())
-        if not weekday_name:
-            await event.message.answer("❓ Напишите: пн, вт, ср, чт, пт или сб")
-            return
-        text = self.db.format_full_schedule(weekday_name)
-        text += f"\n\n{self.db.format_educational_practice()}"
-        schedule_link = self.db.get_schedule_link()
-        if schedule_link:
-            text += f"\n\n📎 {schedule_link['name']}: {schedule_link['url']}"
-        text += "\n\n🔙 Отправьте 0 для возврата или напишите другой день"
+        text += "\n🔙 Отправьте 0 для возврата"
         await event.message.answer(text)
 
     async def show_contacts(self, event: MessageCreated):
@@ -583,18 +642,22 @@ class AdmissionsBot:
         self.user_menu_state[user_id] = 'main'
         contacts = self.db.get_contacts()
         if not contacts:
-            await event.message.answer("КОНТАКТНАЯ ИНФОРМАЦИЯ\n\nИнформация временно недоступна.\n\n🔙 Отправьте 0 для возврата")
+            await event.message.answer("📞 КОНТАКТНАЯ ИНФОРМАЦИЯ\n\nИнформация временно недоступна.\n\n🔙 Отправьте 0 для возврата")
             return
         text = "📞 КОНТАКТНАЯ ИНФОРМАЦИЯ\n\n"
         for contact in contacts:
-            text += f"📌 Телефон: {contact['phone']}\n" if contact['phone'] else ""
-            text += f"📧 Email: {contact['email']}\n" if contact['email'] else ""
-            text += f"🏢 Адрес: {contact['address']}\n" if contact['address'] else ""
-            text += f"🕐 Часы работы: {contact['working_hours']}\n" if contact['working_hours'] else ""
+            if contact['phone']:
+                text += f"📱 Телефон: {contact['phone']}\n"
+            if contact['email']:
+                text += f"📧 Email: {contact['email']}\n"
+            if contact['address']:
+                text += f"🏢 Адрес: {contact['address']}\n"
+            if contact['working_hours']:
+                text += f"🕐 Часы работы: {contact['working_hours']}\n"
             text += "\n"
         text += "\n🔙 Отправьте 0 для возврата"
         await event.message.answer(text)
-
+    
     async def show_dates(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         self.user_menu_state[user_id] = 'main'
@@ -604,23 +667,10 @@ class AdmissionsBot:
             return
         text = "📅 ВАЖНЫЕ ДАТЫ\n\n"
         for date_item in dates:
-            text += f"📌 *{date_item['title']}*\n   Дата: {date_item['date_value']}\n"
+            text += f"📌 *{date_item['title']}*\n   📅 Дата: {date_item['date_value']}\n"
             if date_item['description']:
-                text += f"   {date_item['description']}\n"
+                text += f"   📝 {date_item['description']}\n"
             text += "\n"
-        text += "\n🔙 Отправьте 0 для возврата"
-        await event.message.answer(text)
-    
-    async def show_documents(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
-        self.user_menu_state[user_id] = 'main'
-        links = self.db.get_all_links()
-        if not links:
-            await event.message.answer("📜 ДОКУМЕНТЫ И ПРАВИЛА\n\nДокументы временно недоступны.\n\n🔙 Отправьте 0 для возврата")
-            return
-        text = "📜 ДОКУМЕНТЫ И ПРАВИЛА\n\n"
-        for link in links:
-            text += f"• {link['name']}: {link['url']}\n"
         text += "\n🔙 Отправьте 0 для возврата"
         await event.message.answer(text)
     
@@ -630,16 +680,16 @@ class AdmissionsBot:
         documents = self.db.get_documents()
         text = "❓ КАК СТАТЬ СТУДЕНТОМ?\n\n"
         if documents:
-            text += "Необходимые документы:\n"
+            text += "Необходимые документы для поступления:\n\n"
             for doc in documents:
-                required = "Обязательный" if doc['is_required']
-                    else "Дополнительный"
-                text += f"• {doc['name']} ({required})\n"
+                required = "✅ Обязательный" if doc['is_required'] else "ℹ️ Дополнительный"
+                text += f"📄 **{doc['name']}** ({required})\n"
                 if doc['description']:
-                    text += f"  {doc['description']}\n"
+                    text += f"   {doc['description']}\n"
+                text += "\n"
         else:
             text += "Информация о документах временно недоступна.\n"
-        text += "\n\n🔙 Отправьте 0 для возврата"
+        text += "\n🔙 Отправьте 0 для возврата"
         await event.message.answer(text)
 
     async def show_activities(self, event: MessageCreated):
@@ -651,11 +701,11 @@ class AdmissionsBot:
             return
         text = "⚽ ВНЕУРОЧНЫЕ АКТИВНОСТИ\n\n"
         for activity in activities:
-            text += f"• {activity['name']}\n"
+            text += f"🏆 {activity['name']}\n"
             if activity['schedule']:
-                text += f"  Расписание: {activity['schedule']}\n"
+                text += f"   🕐 Расписание: {activity['schedule']}\n"
             if activity['description']:
-                text += f"  {activity['description']}\n"
+                text += f"   📝 {activity['description']}\n"
             text += "\n"
         text += "\n🔙 Отправьте 0 для возврата"
         await event.message.answer(text)
@@ -666,24 +716,28 @@ class AdmissionsBot:
         text = """
 🔍 СПРАВКА ПО КОМАНДАМ
 
+Основные команды:
 /start - Главное меню
 /my_orders - Мои заказы справок
 
 Навигация по меню:
-1 - Специальности
-2 - Общежитие
-3 - Расписание звонков
-4 - Контакты
-5 - Важные даты
-6 - Документы и правила
-7 - Абитуриентам
-8 - Внеурочные активности
-9 - Заказать справку
-10 - Мои справки
+1 - 🎓 Специальности
+2 - 🏠 Общежитие
+3 - 🕐 Расписание
+4 - 📞 Контакты
+5 - 📅 Важные даты
+6 - 📜 Документы и правила
+7 - ❓ Абитуриентам
+8 - ⚽ Внеурочные активности
+9 - 📄 Заказать справку
+10 - 📋 Мои заказы
 
 0 - Вернуться в главное меню
-"""
+
+💡 Подсказка: В разделе "Расписание" можно написать день недели (пн, вт, ср, чт, пт, сб), чтобы посмотреть расписание на конкретный день.
+        """
         await event.message.answer(text)
+
     async def handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text
@@ -701,6 +755,7 @@ class AdmissionsBot:
             if text.lower() in day_variants:
                 await self.show_schedule_for_day(event, text)
                 return
+
         if menu_state == 'specialties_types':
             if text.isdigit() and int(text) > 0:
                 type_id = int(text)
@@ -709,9 +764,9 @@ class AdmissionsBot:
                 if type_id in type_ids:
                     await self.show_specialties_by_type(event, type_id)
                 else:
-                    await event.message.answer("Неверный номер. Попробуйте снова:")
+                    await event.message.answer("❌ Неверный номер. Попробуйте снова:")
             else:
-                await event.message.answer("Пожалуйста, отправьте номер типа специальности:")
+                await event.message.answer("❌ Пожалуйста, отправьте номер типа специальности:")
             return
         if menu_state == 'specialties_list':
             if text == '0':
@@ -719,6 +774,7 @@ class AdmissionsBot:
             else:
                 await event.message.answer("🔙 Отправьте 0 чтобы вернуться")
             return
+
 
         if text == '/start':
             await self.show_main_menu(event)
@@ -752,8 +808,10 @@ class AdmissionsBot:
             await event.message.answer(
                 "❓ Неизвестная команда.\n\n"
                 "Отправьте /start для главного меню или /help для справки.")
+
     async def start(self):
         await self.dp.start_polling(self.bot)
+
 
 def main():
     config = Config()
@@ -765,6 +823,7 @@ def main():
         print("\nБот остановлен")
     finally:
         db.close()
+
 
 if __name__ == "__main__":
     main()
