@@ -1,27 +1,29 @@
-Список источников (1.8к символов)
-Книги и учебные пособия:
-Лутц М. "Изучаем Python" Том 1 - 5-е изд. - Санкт-Петербург: Диалектика, 2023. - 832 с.
-Лутц М. "Изучаем Python" Том 2 - 5-е изд. - Санкт-Петербург: Диалектика, 2023. - 928 с.
-Креспе Ж. "Разработка чат-ботов на Python: от идеи до реализации" - Москва: ДМК Пресс, 2023. - 350 с.
-Сейерс С. "SQLite. Базы данных. Карманный справочник" - Москва: ДМК Пресс, 2022. - 160 с.
+Список источников
+
+Книги и учебные пособия
+- Лутц М. "Изучаем Python" Том 1 - 5-е изд. - Санкт-Петербург: Диалектика, 2023. - 832 с.
+- Лутц М. "Изучаем Python" Том 2 - 5-е изд. - Санкт-Петербург: Диалектика, 2023. - 928 с.
+- Креспе Ж. "Разработка чат-ботов на Python: от идеи до реализации" - Москва: ДМК Пресс, 2023. - 350 с.
+- Сейерс С. "SQLite. Базы данных. Карманный справочник" - Москва: ДМК Пресс, 2022. - 160 с.
+
 
 Электронные ресурсы
+
 Документация и руководства
-SQLite Documentation SQLite.org. - Режим доступа: https://www.sqlite.org/docs.html (дата обращения: 20.02.2026). 
-SQLite Appropriate Uses SQLite.org. - Режим доступа: https://www.sqlite.org/whentouse.html (дата обращения: 20.02.2026). 
-SQLite Query Language Documentation SQLite.org. - Режим доступа: https://www.sqlite.org/lang.html (дата обращения: 20.02.2026). 
-SQLite Foreign Key Support SQLite.org. - Режим доступа: https://www.sqlite.org/foreignkeys.html (дата обращения: 20.02.2026). 
-SQLite Indexes On Expressions SQLite.org. - Режим доступа: https://www.sqlite.org/expridx.html (дата обращения: 20.02.2026). 
-API мессенджера Макс
-MAX API - гайд по работе с API мессенджера MAX GitHub. - Режим доступа: https://github.com/PronikFire/Max-API-Guide (дата обращения: 21.02.2026). 
-Python враппер для работы с внутренним API MAX (Userbot) GitHub. - Режим доступа: https://github.com/Sharkow1743/MaxAPI (дата обращения: 21.02.2026). 
+- SQLite Documentation SQLite.org. - Режим доступа: https://www.sqlite.org/docs.html (дата обращения: 20.02.2026).
+- SQLite Appropriate Uses SQLite.org. - Режим доступа: https://www.sqlite.org/whentouse.html (дата обращения: 20.02.2026).
+- SQLite Query Language Documentation SQLite.org. - Режим доступа: https://www.sqlite.org/lang.html (дата обращения: 20.02.2026).
+- SQLite Foreign Key Support SQLite.org. - Режим доступа: https://www.sqlite.org/foreignkeys.html (дата обращения: 20.02.2026).
+- SQLite Indexes On Expressions SQLite.org. - Режим доступа: https://www.sqlite.org/expridx.html (дата обращения: 20.02.2026).
+- MAX API - гайд по работе с API мессенджера MAX GitHub.com - Режим доступа: https://github.com/PronikFire/Max-API-Guide (дата обращения: 21.02.2026).
+- Python враппер для работы с внутренним API MAX (Userbot) GitHub.com - Режим доступа: https://github.com/Sharkow1743/MaxAPI (дата обращения: 21.02.2026).
 
 Инструменты и библиотеки
-Python Software Foundation. Python 3.10 Documentation - Режим доступа: https://docs.python.org/3.10/ (дата обращения: 24.02.2026).
-pytest. pytest Documentation - Режим доступа: https://docs.pytest.org/ (дата обращения: 24.02.2026).
-SQLite Consortium. SQLite Copyright and License - Режим доступа: https://www.sqlite.org/copyright.html (дата обращения: 24.02.2026).
-SQLite Optimization FAQ - Режим доступа: https://www.sqlite.org/faq.html (дата обращения: 26.02.2026).
-Amvera Cloud. Документация по развертыванию приложений. - Режим доступа: https://docs.amvera.cloud/ (дата обращения: 04.05.2026).
-Beget. Виртуальные серверы VPS/VDS - Режим доступа: https://beget.com/vps (дата обращения: 04.05.2026).
-Reg.ru. Хостинг и серверы - Режим доступа: https://www.reg.ru/hosting (дата обращения: 04.05.2026).
-Timeweb Cloud. Облачный хостинг для разработчиков - Режим доступа: https://timeweb.cloud/ (дата обращения: 04.05.2026).
+- Python Software Foundation. Python 3.10 Documentation - Режим доступа: https://docs.python.org/3.10/ (дата обращения: 24.02.2026).
+- pytest. pytest Documentation - Режим доступа: https://docs.pytest.org/ (дата обращения: 24.02.2026).
+- SQLite Consortium. SQLite Copyright and License - Режим доступа: https://www.sqlite.org/copyright.html (дата обращения: 24.02.2026).
+- SQLite Optimization FAQ - Режим доступа: https://www.sqlite.org/faq.html (дата обращения: 26.02.2026).
+- Amvera Cloud. Документация по развертыванию приложений. - Режим доступа: https://docs.amvera.cloud/ (дата обращения: 04.05.2026).
+- Beget. Виртуальные серверы VPS/VDS - Режим доступа: https://beget.com/vps (дата обращения: 04.05.2026).
+- Reg.ru. Хостинг и серверы - Режим доступа: https://www.reg.ru/hosting (дата обращения: 04.05.2026).
+- Timeweb Cloud. Облачный хостинг для разработчиков - Режим доступа: https://timeweb.cloud/ (дата обращения: 04.05.2026).
