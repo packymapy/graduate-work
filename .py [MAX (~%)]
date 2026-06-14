@@ -9,6 +9,7 @@ from maxapi.types import BotStarted, Command, MessageCreated
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class Config:
     def __init__(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -71,13 +72,11 @@ class Database:
             'wednesday': 'СРЕДА', 'thursday': 'ЧЕТВЕРГ',
             'friday': 'ПЯТНИЦА', 'saturday': 'СУББОТА'
         }.get(weekday_name, weekday_name.upper())
-
         lessons = self.get_schedule_by_day(weekday_name)
         events = self.get_events_by_day(weekday_name)
-
         if not lessons and not events:
             return f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n{weekday_ru}:\nВременно недоступно"
-
+        
         text = f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n📅 {weekday_ru}:\n\n"
         for event in events:
             text += f"⏰ {event['name']}: {event['start_time']} - {event['end_time']}\n"
@@ -137,7 +136,6 @@ class Database:
         cursor = self.conn.cursor()
         updates = []
         params = []
-
         if status:
             updates.append('status = ?')
             params.append(status)
@@ -147,7 +145,6 @@ class Database:
         if file_id:
             updates.append('file_id = ?')
             params.append(file_id)
-
         if updates:
             updates.append('status_updated_at = ?')
             params.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
@@ -225,13 +222,11 @@ class AdmissionsBot:
     STATUS_IN_PROGRESS = 'in_progress'
     STATUS_READY = 'ready'
     STATUS_COMPLETED = 'completed'
-
     STATUS_DISPLAY = {
         'new': '🟡 Новый',
         'in_progress': '🔵 В работе',
         'ready': '🟢 Готов к выдаче',
-        'completed': '✅ Выдан'
-    }
+        'completed': '✅ Выдан'}
 
     def __init__(self, token: str, db: Database, admin_ids: list, config: Config):
         self.bot = Bot(token=token)
@@ -249,7 +244,7 @@ class AdmissionsBot:
         async def on_started(event: BotStarted):
             await event.bot.send_message(
                 chat_id=event.chat_id,
-                text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы.")
+                text="👋 Добро пожаловать в бот ГПОУ "СПТ"!\n\nОтправьте /start для начала работы.")
 
         @self.dp.message_created(Command('start'))
         async def on_start(event: MessageCreated):
@@ -275,14 +270,10 @@ class AdmissionsBot:
     async def show_main_menu(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         self.user_menu_state[user_id] = 'main'
-
         user_orders = self.db.get_user_orders(user_id)
         orders_badge = f" ({len(user_orders)})" if user_orders else ""
-
         text = f"""
 🏠 ГЛАВНОЕ МЕНЮ
-
-Добро пожаловать в бот ГПОУ "СПТ"!
 
 📋 Выберите нужный раздел:
 
@@ -297,8 +288,6 @@ class AdmissionsBot:
 9 - 📄 Заказать справку
 10 - 📋 Мои заказы{orders_badge}
 
-0 - 🔙 Помощь
-
 ➡️ Отправьте номер раздела:
         """
         await event.message.answer(text)
@@ -306,25 +295,21 @@ class AdmissionsBot:
     async def show_schedule(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         self.user_menu_state[user_id] = 'schedule_menu'
-
         now = datetime.now()
         weekday_num = now.weekday()
         weekday_map = {0: 'monday', 1: 'tuesday', 2: 'wednesday',
                        3: 'thursday', 4: 'friday', 5: 'saturday', 6: 'sunday'}
         today_name = weekday_map.get(weekday_num)
-
         if today_name == 'sunday':
             text = "📅 Сегодня воскресенье - учебных занятий нет!"
         else:
             text = self.db.format_ringing_schedule(today_name)
             text += "\n\n" + self.db.format_practice_schedule()
-
         schedule_links = self.db.get_links_by_category('schedule')
         if schedule_links:
             text += "\n\n📎 Ссылки на расписание\n"
             for link in schedule_links:
                 text += f"• {link['name']} - {link['url']}\n"
-
         text += "\n\n📅 Чтобы посмотреть расписание на другой день, напишите:\n"
         text += "пн, вт, ср, чт, пт, сб\n\n"
         text += "🔙 Отправьте 0 для возврата в главное меню"
@@ -337,22 +322,18 @@ class AdmissionsBot:
             'ср': 'wednesday', 'ср.': 'wednesday', 'среда': 'wednesday',
             'чт': 'thursday', 'чт.': 'thursday', 'четверг': 'thursday',
             'пт': 'friday', 'пт.': 'friday', 'пятница': 'friday',
-            'сб': 'saturday', 'сб.': 'saturday', 'суббота': 'saturday'
-        }
+            'сб': 'saturday', 'сб.': 'saturday', 'суббота': 'saturday'}
         weekday_name = day_map.get(day_ru.lower())
         if not weekday_name:
             await event.message.answer("❓ Напишите: пн, вт, ср, чт, пт или сб")
             return
-
         text = self.db.format_ringing_schedule(weekday_name)
         text += "\n\n" + self.db.format_practice_schedule()
-
         schedule_links = self.db.get_links_by_category('schedule')
         if schedule_links:
             text += "\n\n📎 Ссылки на расписание:\n"
             for link in schedule_links:
                 text += f"• {link['name']} - {link['url']}\n"
-
         text += "\n\n🔙 Отправьте 0 для возврата в главное меню или напишите другой день"
         await event.message.answer(text)
 
@@ -364,8 +345,7 @@ class AdmissionsBot:
             await event.message.answer(
                 "📜 ДОКУМЕНТЫ И ПРАВИЛА\n\n"
                 "Документы временно недоступны.\n\n"
-                "🔙 Отправьте 0 для возврата в главное меню"
-            )
+                "🔙 Отправьте 0 для возврата в главное меню")
             return
         text = "📜 ДОКУМЕНТЫ И ПРАВИЛА ГПОУ \"СПТ\"\n\n"
         text += "Ознакомьтесь с официальными документами техникума:\n\n"
@@ -376,11 +356,9 @@ class AdmissionsBot:
 
     async def show_admin_panel(self, event: MessageCreated):
         user_id = event.message.sender.user_id
-
         if user_id not in self.admin_ids:
             await event.message.answer("⛔ У вас нет прав администратора.")
             return
-
         self.user_menu_state[user_id] = 'admin_panel'
         stats = self.db.get_orders_count_by_status()
         text = """
@@ -411,18 +389,15 @@ class AdmissionsBot:
             await event.message.answer(f"📭 Заказов {status_name} нет.")
             await self.show_admin_panel(event)
             return
-
         status_name = self.STATUS_DISPLAY.get(status, "ВСЕ") if status else "ВСЕ"
         await event.message.answer(
             f"📋 {status_name} ЗАКАЗЫ (всего: {len(orders)})\n\nОтправьте ID заказа для просмотра:")
-
         for order in orders:
             status_display = self.STATUS_DISPLAY.get(order['status'], order['status'])
             group = order['student_group'] if order['student_group'] else 'не указана'
             text = f"🎫 #{order['order_id']} | {order['student_full_name']} | {group} | {status_display}"
             await event.message.answer(text)
             await asyncio.sleep(0.1)
-
         await event.message.answer("\n🔙 Отправьте 0 для возврата в панель администратора")
         self.user_menu_state[user_id] = 'admin_viewing_orders'
 
@@ -469,8 +444,7 @@ class AdmissionsBot:
         if not orders:
             await event.message.answer(
                 "📋 У вас нет заказов справок.\n\n"
-                "Чтобы заказать справку, отправьте 9 в главном меню."
-            )
+                "Чтобы заказать справку, отправьте 9 в главном меню.")
             return
         text = f"📋 ВАШИ ЗАКАЗЫ (всего: {len(orders)})\n\n"
         for order in orders:
@@ -487,19 +461,16 @@ class AdmissionsBot:
         text += "\n🔙 Отправьте 0 для возврата в главное меню"
         await event.message.answer(text)
 
-    async def update_order_status_with_notification(self, event: MessageCreated, order_id: int, new_status: str = None,
-                                                    comment: str = None):
+    async def update_order_status_with_notification(self, event: MessageCreated, order_id: int, new_status: str = None, comment: str = None):
         order = self.db.get_order_by_id(order_id)
         if not order:
             await event.message.answer("Заказ не найден.")
             return False
-
         success = self.db.update_order_status(order_id, new_status, comment)
         if success:
             if new_status:
                 status_display = self.STATUS_DISPLAY[new_status]
                 await event.message.answer(f"✅ Статус заказа #{order_id} изменен на '{status_display}'")
-
                 try:
                     notification_text = f"""
 📢 ИЗМЕНЕНИЕ СТАТУСА ЗАКАЗА #{order_id}
@@ -514,8 +485,7 @@ class AdmissionsBot:
                         notification_text += "\n📎 Справка готова к выдаче! Обратитесь в учебный отдел."
                     await event.bot.send_message(
                         chat_id=order['user_id'],
-                        text=notification_text
-                    )
+                        text=notification_text)
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление: {e}")
             else:
@@ -544,10 +514,9 @@ class AdmissionsBot:
             self.user_states[user_id]['step'] = 'waiting_group'
             await event.message.answer(
                 "📚 Введите номер группы:\n"
-                "Пример: С-21-1\n\n"
+                "Пример: 414\n\n"
                 "🔙 Отправьте 0 для отмены")
             return
-
         elif state['step'] == 'waiting_group':
             if text == '0':
                 del self.user_states[user_id]
@@ -576,8 +545,7 @@ class AdmissionsBot:
                 '1': 'Справка об обучении',
                 '2': 'Академическая справка',
                 '3': 'Справка о состоянии здоровья',
-                '4': 'Справка о проживании в общежитии'
-            }
+                '4': 'Справка о проживании в общежитии'}
             cert_type = type_map.get(text, text)
             order_id = self.db.save_order(user_id, name, group, cert_type)
             del self.user_states[user_id]
@@ -588,7 +556,6 @@ class AdmissionsBot:
                 f"📄 Тип: {cert_type}\n\n"
                 f"📋 Вы можете отслеживать статус заказа через команду /my_orders\n\n"
                 f"🔙 Отправьте 0 для возврата в меню")
-
             for admin_id in self.admin_ids:
                 try:
                     await event.bot.send_message(
@@ -837,8 +804,7 @@ class AdmissionsBot:
             if text == '0':
                 await self.show_admin_panel(event)
             elif text == '1':
-                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_IN_PROGRESS,
-                                                                 None)
+                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_IN_PROGRESS, None)
                 order = self.db.get_order_by_id(self.current_order_id)
                 await self.send_order_card(event, order)
             elif text == '2':
@@ -846,8 +812,7 @@ class AdmissionsBot:
                 order = self.db.get_order_by_id(self.current_order_id)
                 await self.send_order_card(event, order)
             elif text == '3':
-                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_COMPLETED,
-                                                                 None)
+                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_COMPLETED, None)
                 order = self.db.get_order_by_id(self.current_order_id)
                 await self.send_order_card(event, order)
             elif text == '4':
