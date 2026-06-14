@@ -1,0 +1,138 @@
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    first_name TEXT NOT NULL,
+    last_name TEXT,
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS weekdays (
+    id INTEGER PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL);
+
+
+CREATE TABLE IF NOT EXISTS weekday_template_map (
+    id INTEGER PRIMARY KEY,
+    weekday_id INTEGER NOT NULL,
+    template_id INTEGER NOT NULL,
+    FOREIGN KEY (weekday_id) REFERENCES weekdays(id));
+
+CREATE TABLE IF NOT EXISTS schedule (
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL,
+    lesson_number INTEGER NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS educational_practice (
+    id INTEGER PRIMARY KEY,
+    shift_number INTEGER NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS links (
+    link_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    category TEXT NOT NULL,
+    priority INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+
+CREATE TABLE IF NOT EXISTS certificate_orders (
+    order_id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    student_full_name TEXT NOT NULL,
+    student_group TEXT,
+    certificate_type TEXT NOT NULL,
+    student_message TEXT,
+    status TEXT NOT NULL DEFAULT 'new',
+    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    admin_comment TEXT,
+    file_id TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(user_id));
+
+
+CREATE TABLE IF NOT EXISTS types_of_specialties (
+    tos_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS specialties (
+    spec_id INTEGER PRIMARY KEY,
+    tos_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    duration_years TEXT,
+    budget_places INTEGER,
+    paid_places INTEGER,
+    price_per_year INTEGER,
+    FOREIGN KEY (tos_id) REFERENCES types_of_specialties(tos_id));
+
+
+CREATE TABLE IF NOT EXISTS contacts (
+    contact_id INTEGER PRIMARY KEY,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    working_hours TEXT,
+    priority INTEGER DEFAULT 0);
+
+
+CREATE TABLE IF NOT EXISTS important_dates (
+    date_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    date_value TEXT NOT NULL,
+    description TEXT);
+
+
+CREATE TABLE IF NOT EXISTS dormitory (
+    dorm_id INTEGER PRIMARY KEY,
+    type_places TEXT NOT NULL,
+    price_per_month INTEGER NOT NULL);
+
+
+CREATE TABLE IF NOT EXISTS documents (
+    doc_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    is_required BOOLEAN DEFAULT 0,
+    priority INTEGER DEFAULT 0);
+
+
+CREATE TABLE IF NOT EXISTS sports_activities (
+    sa_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    venue_id INTEGER,
+    description TEXT,
+    schedule TEXT);
+
+
+
+CREATE INDEX IF NOT EXISTS idx_links_category ON links(category);
+CREATE INDEX IF NOT EXISTS idx_links_priority ON links(priority);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON certificate_orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON certificate_orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_order_date ON certificate_orders(order_date);
+CREATE INDEX IF NOT EXISTS idx_specialties_tos_id ON specialties(tos_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_priority ON contacts(priority);
+CREATE INDEX IF NOT EXISTS idx_dates_date_value ON important_dates(date_value);
+CREATE INDEX IF NOT EXISTS idx_dormitory_price ON dormitory(price_per_month);
+CREATE INDEX IF NOT EXISTS idx_sports_name ON sports_activities(name);
+CREATE INDEX IF NOT EXISTS idx_documents_priority ON documents(priority);
+
+
+
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (1, 'monday');
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (2, 'tuesday');
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (3, 'wednesday');
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (4, 'thursday');
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (5, 'friday');
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (6, 'saturday');
+INSERT OR IGNORE INTO weekdays (id, name) VALUES (7, 'sunday');
