@@ -16,7 +16,7 @@ class Config:
         db_dir = os.path.join(base_dir, 'data')
         if not os.path.exists(db_dir):
             os.makedirs(db_dir)
-        self.db_path = 'C:/programs/bot/db.db'
+        self.db_path = 'db.db'
         self.bot_token = 'f9LHodD0cOKSZQ9eeDyohe9uasugo0bDjddhlPpSRXSGQ6FDBC3oX0lDauc9lZ6jkHKhtaeKji_Z_FbIHvl3'
         self.admin_ids = [96538118]
 
