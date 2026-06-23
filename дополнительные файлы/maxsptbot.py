@@ -1,0 +1,950 @@
+import asyncio
+import logging
+import sqlite3
+import os
+from datetime import datetime
+from maxapi import Bot, Dispatcher
+from maxapi.types import BotStarted, Command, MessageCreated
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class Config:
+    def __init__(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        db_dir = os.path.join(base_dir, 'data')
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+        self.db_path = 'db.db'
+        self.bot_token = 'f9LHodD0cOKSZQ9eeDyohe9uasugo0bDjddhlPpSRXSGQ6FDBC3oX0lDauc9lZ6jkHKhtaeKji_Z_FbIHvl3'
+        self.admin_ids = [96538118]
+
+
+class Database:
+    def __init__(self, config: Config):
+        self.config = config
+        self.conn = sqlite3.connect(config.db_path)
+        self.conn.row_factory = sqlite3.Row
+
+    def get_schedule_by_day(self, weekday_name: str):
+        cursor = self.conn.execute('''
+            SELECT s.lesson_number, s.start_time, s.end_time
+            FROM weekday_template_map wtm
+            JOIN weekdays w ON w.id = wtm.weekday_id
+            JOIN schedule s ON s.template_id = wtm.template_id
+            WHERE w.name = ?
+            ORDER BY s.lesson_number
+        ''', (weekday_name,))
+        return cursor.fetchall()
+
+    def get_events_by_day(self, weekday_name: str):
+        cursor = self.conn.execute('''
+            SELECT e.name, e.start_time, e.end_time
+            FROM weekday_template_map wtm
+            JOIN weekdays w ON w.id = wtm.weekday_id
+            JOIN events e ON e.template_id = wtm.template_id
+            WHERE w.name = ?
+            ORDER BY e.start_time
+        ''', (weekday_name,))
+        return cursor.fetchall()
+
+    def get_educational_practice(self):
+        cursor = self.conn.execute('''
+            SELECT shift_number, start_time, end_time
+            FROM educational_practice
+            ORDER BY shift_number
+        ''')
+        return cursor.fetchall()
+
+    def get_links_by_category(self, category: str):
+        cursor = self.conn.execute('''
+            SELECT link_id, name, url, priority 
+            FROM links 
+            WHERE category = ?
+            ORDER BY priority, link_id
+        ''', (category,))
+        return cursor.fetchall()
+
+    def format_ringing_schedule(self, weekday_name: str) -> str:
+        weekday_ru = {
+            'monday': 'ПОНЕДЕЛЬНИК', 'tuesday': 'ВТОРНИК',
+            'wednesday': 'СРЕДА', 'thursday': 'ЧЕТВЕРГ',
+            'friday': 'ПЯТНИЦА', 'saturday': 'СУББОТА'
+        }.get(weekday_name, weekday_name.upper())
+
+        lessons = self.get_schedule_by_day(weekday_name)
+        events = self.get_events_by_day(weekday_name)
+
+        if not lessons and not events:
+            return f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n{weekday_ru}:\nВременно недоступно"
+
+        text = f"🕐 РАСПИСАНИЕ ЗВОНКОВ\n\n📅 {weekday_ru}:\n\n"
+        for event in events:
+            text += f"⏰ {event['name']}: {event['start_time']} - {event['end_time']}\n"
+        for lesson in lessons:
+            text += f"📚 {lesson['lesson_number']} урок: {lesson['start_time']} - {lesson['end_time']}\n"
+        return text
+
+    def format_practice_schedule(self) -> str:
+        practice = self.get_educational_practice()
+        if not practice:
+            return "📚 УЧЕБНАЯ ПРАКТИКА:\nИнформация временно недоступна"
+        text = "📚 УЧЕБНАЯ ПРАКТИКА:\n\n"
+        for p in practice:
+            text += f"⏰ {p['shift_number']} смена: {p['start_time']} - {p['end_time']}\n"
+        return text
+
+    def get_or_create_user(self, user_id: int, first_name: str, last_name: str = ''):
+        cursor = self.conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            self.conn.execute(
+                'INSERT INTO users (user_id, first_name, last_name) VALUES (?, ?, ?)',
+                (user_id, first_name, last_name))
+            self.conn.commit()
+        return user
+
+    def save_order(self, user_id: int, full_name: str, group: str, cert_type: str, message: str = None):
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor = self.conn.execute(
+            '''INSERT INTO certificate_orders 
+               (user_id, student_full_name, student_group, certificate_type, student_message, status, order_date, status_updated_at) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (user_id, full_name, group, cert_type, message, 'new', now, now))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_orders_by_status(self, status: str = None):
+        if status:
+            cursor = self.conn.execute(
+                'SELECT * FROM certificate_orders WHERE status = ? ORDER BY order_date DESC',
+                (status,))
+        else:
+            cursor = self.conn.execute('SELECT * FROM certificate_orders ORDER BY order_date DESC')
+        return cursor.fetchall()
+
+    def get_user_orders(self, user_id: int):
+        cursor = self.conn.execute(
+            'SELECT * FROM certificate_orders WHERE user_id = ? ORDER BY order_date DESC',
+            (user_id,))
+        return cursor.fetchall()
+
+    def get_order_by_id(self, order_id: int):
+        cursor = self.conn.execute('SELECT * FROM certificate_orders WHERE order_id = ?', (order_id,))
+        return cursor.fetchone()
+
+    def update_order_status(self, order_id: int, status: str = None, admin_comment: str = None, file_id: str = None):
+        cursor = self.conn.cursor()
+        updates = []
+        params = []
+        if status:
+            updates.append('status = ?')
+            params.append(status)
+        if admin_comment:
+            updates.append('admin_comment = ?')
+            params.append(admin_comment)
+        if file_id:
+            updates.append('file_id = ?')
+            params.append(file_id)
+        if updates:
+            updates.append('status_updated_at = ?')
+            params.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            params.append(order_id)
+            cursor.execute(f'UPDATE certificate_orders SET {", ".join(updates)} WHERE order_id = ?', params)
+            self.conn.commit()
+            return cursor.rowcount > 0
+        return False
+
+    def get_orders_count_by_status(self):
+        cursor = self.conn.execute('''
+            SELECT status, COUNT(*) as count 
+            FROM certificate_orders 
+            GROUP BY status
+        ''')
+        return {row['status']: row['count'] for row in cursor.fetchall()}
+
+    def delete_order(self, order_id: int):
+        cursor = self.conn.execute('DELETE FROM certificate_orders WHERE order_id = ?', (order_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_types_of_specialties(self):
+        cursor = self.conn.execute('SELECT tos_id, name FROM types_of_specialties ORDER BY tos_id')
+        return cursor.fetchall()
+
+    def get_specialties_by_type(self, type_id: int):
+        cursor = self.conn.execute('''
+            SELECT spec_id, code, name, description, duration_years, 
+                   budget_places, paid_places, price_per_year
+            FROM specialties WHERE tos_id = ? ORDER BY code''', (type_id,))
+        return cursor.fetchall()
+
+    def get_contacts(self):
+        cursor = self.conn.execute('''
+            SELECT contact_id, phone, email, address, working_hours, priority 
+            FROM contacts ORDER BY priority
+        ''')
+        return cursor.fetchall()
+
+    def get_important_dates(self):
+        cursor = self.conn.execute('''
+            SELECT date_id, title, date_value, description 
+            FROM important_dates ORDER BY date_value
+        ''')
+        return cursor.fetchall()
+
+    def get_dormitory_prices(self):
+        cursor = self.conn.execute('''
+            SELECT dorm_id, type_places, price_per_month 
+            FROM dormitory ORDER BY price_per_month
+        ''')
+        return cursor.fetchall()
+
+    def get_documents(self):
+        cursor = self.conn.execute('''
+            SELECT doc_id, name, description, is_required, priority 
+            FROM documents ORDER BY priority
+        ''')
+        return cursor.fetchall()
+
+    def get_sports_activities(self):
+        cursor = self.conn.execute('''
+            SELECT sa.sa_id, sa.name, sa.venue_id, v.name as venue_name
+            FROM sports_activities sa
+            LEFT JOIN venues v ON sa.venue_id = v.venue_id
+            ORDER BY sa.name;
+        ''')
+        return cursor.fetchall()
+
+    def close(self):
+        self.conn.close()
+
+
+class AdmissionsBot:
+    STATUS_NEW = 'new'
+    STATUS_IN_PROGRESS = 'in_progress'
+    STATUS_READY = 'ready'
+    STATUS_COMPLETED = 'completed'
+    STATUS_DISPLAY = {
+        'new': '🟡 Новый',
+        'in_progress': '🔵 В работе',
+        'ready': '🟢 Готов к выдаче',
+        'completed': '✅ Выдан'}
+
+    def __init__(self, token: str, db: Database, admin_ids: list, config: Config):
+        self.bot = Bot(token=token)
+        self.db = db
+        self.admin_ids = admin_ids
+        self.config = config
+        self.dp = Dispatcher()
+        self.user_states = {}
+        self.user_menu_state = {}
+        self.current_order_id = None
+        self.register_handlers()
+
+    def register_handlers(self):
+        @self.dp.bot_started()
+        async def on_started(event: BotStarted):
+            await event.bot.send_message(
+                chat_id=event.chat_id,
+                text="👋 Добро пожаловать в бот приемной комиссии!\n\nОтправьте /start для начала работы.")
+
+        @self.dp.message_created(Command('start'))
+        async def on_start(event: MessageCreated):
+            user_id = event.message.sender.user_id
+            first_name = event.message.sender.first_name
+            last_name = getattr(event.message.sender, 'last_name', '')
+            self.db.get_or_create_user(user_id, first_name, last_name)
+            self.user_menu_state[user_id] = 'main'
+            await self.show_main_menu(event)
+
+        @self.dp.message_created(Command('admin'))
+        async def on_admin(event: MessageCreated):
+            await self.handle_admin_panel(event)
+
+        @self.dp.message_created(Command('my_orders'))
+        async def on_my_orders(event: MessageCreated):
+            await self.show_my_orders(event)
+
+        @self.dp.message_created()
+        async def on_message(event: MessageCreated):
+            await self.handle_message(event)
+
+    async def show_main_menu(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+
+        user_orders = self.db.get_user_orders(user_id)
+        orders_badge = f" ({len(user_orders)})" if user_orders else ""
+
+        text = f"""
+🏠 ГЛАВНОЕ МЕНЮ
+
+Добро пожаловать в бот ГПОУ "СПТ"!
+
+📋 Выберите нужный раздел:
+
+1 - 🎓 Специальности
+2 - 🏠 Общежитие
+3 - 🕐 Расписание
+4 - 📞 Контакты
+5 - 📅 Важные даты
+6 - 📜 Документы и правила
+7 - ❓ Абитуриентам
+8 - ⚽ Внеурочные активности
+9 - 📄 Заказать справку
+10 - 📋 Мои заказы{orders_badge}
+
+0 - 🔙 Помощь
+
+➡️ Отправьте номер раздела:
+        """
+        await event.message.answer(text)
+
+    async def show_schedule(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'schedule_menu'
+
+        now = datetime.now()
+        weekday_num = now.weekday()
+        weekday_map = {0: 'monday', 1: 'tuesday', 2: 'wednesday',
+                       3: 'thursday', 4: 'friday', 5: 'saturday', 6: 'sunday'}
+        today_name = weekday_map.get(weekday_num)
+
+        if today_name == 'sunday':
+            text = "📅 Сегодня воскресенье - учебных занятий нет!"
+        else:
+            text = self.db.format_ringing_schedule(today_name)
+            text += "\n\n" + self.db.format_practice_schedule()
+
+        schedule_links = self.db.get_links_by_category('schedule')
+        if schedule_links:
+            text += "\n\n📎 Ссылки на расписание\n"
+            for link in schedule_links:
+                text += f"• {link['name']} - {link['url']}\n"
+
+        text += "\n\n📅 Чтобы посмотреть расписание на другой день, напишите:\n"
+        text += "пн, вт, ср, чт, пт, сб\n\n"
+        text += "🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+
+    async def show_schedule_for_day(self, event: MessageCreated, day_ru: str):
+        day_map = {
+            'пн': 'monday', 'пн.': 'monday', 'понедельник': 'monday',
+            'вт': 'tuesday', 'вт.': 'tuesday', 'вторник': 'tuesday',
+            'ср': 'wednesday', 'ср.': 'wednesday', 'среда': 'wednesday',
+            'чт': 'thursday', 'чт.': 'thursday', 'четверг': 'thursday',
+            'пт': 'friday', 'пт.': 'friday', 'пятница': 'friday',
+            'сб': 'saturday', 'сб.': 'saturday', 'суббота': 'saturday'}
+        weekday_name = day_map.get(day_ru.lower())
+        if not weekday_name:
+            await event.message.answer("❓ Напишите: пн, вт, ср, чт, пт или сб")
+            return
+        text = self.db.format_ringing_schedule(weekday_name)
+        text += "\n\n" + self.db.format_practice_schedule()
+        schedule_links = self.db.get_links_by_category('schedule')
+        if schedule_links:
+            text += "\n\n📎 Ссылки на расписание:\n"
+            for link in schedule_links:
+                text += f"• {link['name']} - {link['url']}\n"
+        text += "\n\n🔙 Отправьте 0 для возврата в главное меню или напишите другой день"
+        await event.message.answer(text)
+
+    async def show_documents(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        documents_links = self.db.get_links_by_category('documents')
+        if not documents_links:
+            await event.message.answer(
+                "📜 ДОКУМЕНТЫ И ПРАВИЛА\n\n"
+                "Документы временно недоступны.\n\n"
+                "🔙 Отправьте 0 для возврата в главное меню"
+            )
+            return
+        text = "📜 ДОКУМЕНТЫ И ПРАВИЛА ГПОУ \"СПТ\"\n\n"
+        text += "Ознакомьтесь с официальными документами техникума:\n\n"
+        for link in documents_links:
+            text += f"• {link['name']} - {link['url']}\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+
+    async def show_admin_panel(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+
+        if user_id not in self.admin_ids:
+            await event.message.answer("⛔ У вас нет прав администратора.")
+            return
+
+        self.user_menu_state[user_id] = 'admin_panel'
+        stats = self.db.get_orders_count_by_status()
+        text = """
+👨‍💼 ПАНЕЛЬ АДМИНИСТРАТОРА
+
+📊 Статистика заказов справок:
+"""
+        for status, display in self.STATUS_DISPLAY.items():
+            count = stats.get(status, 0)
+            text += f"{display}: {count}\n"
+        text += """
+Выберите действие:
+1 - 🟡 Новые заказы
+2 - 🔵 Заказы в работе
+3 - 🟢 Готовые к выдаче
+4 - ✅ Выданные заказы
+5 - 📋 Все заказы
+6 - 🔍 Найти заказ по ID
+0 - 🔙 Вернуться в главное меню
+        """
+        await event.message.answer(text)
+
+    async def show_orders_by_status(self, event: MessageCreated, status: str):
+        user_id = event.message.sender.user_id
+        orders = self.db.get_orders_by_status(status)
+        if not orders:
+            status_name = self.STATUS_DISPLAY.get(status, "Все") if status else "Все"
+            await event.message.answer(f"📭 Заказов {status_name} нет.")
+            await self.show_admin_panel(event)
+            return
+
+        status_name = self.STATUS_DISPLAY.get(status, "ВСЕ") if status else "ВСЕ"
+        await event.message.answer(
+            f"📋 {status_name} ЗАКАЗЫ (всего: {len(orders)})\n\nОтправьте ID заказа для просмотра:")
+
+        for order in orders:
+            status_display = self.STATUS_DISPLAY.get(order['status'], order['status'])
+            group = order['student_group'] if order['student_group'] else 'не указана'
+            text = f"🎫 #{order['order_id']} | {order['student_full_name']} | {group} | {status_display}"
+            await event.message.answer(text)
+            await asyncio.sleep(0.1)
+
+        await event.message.answer("\n🔙 Отправьте 0 для возврата в панель администратора")
+        self.user_menu_state[user_id] = 'admin_viewing_orders'
+
+    async def send_order_card(self, event: MessageCreated, order):
+        status_display = self.STATUS_DISPLAY.get(order['status'], order['status'])
+        group = order['student_group'] if order['student_group'] else 'не указана'
+        message = order['student_message'] if order['student_message'] else 'нет'
+        comment = order['admin_comment'] if order['admin_comment'] else 'нет'
+        text = f"""
+═══════════════════════════
+🎫 ЗАКАЗ #{order['order_id']}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 Студент: {order['student_full_name']}
+📚 Группа: {group}
+📄 Тип: {order['certificate_type']}
+📝 Статус: {status_display}
+💬 Сообщение: {message}
+📅 Создан: {order['order_date']}
+🔄 Обновлен: {order['status_updated_at']}
+📌 Комментарий: {comment}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Доступные действия (отправьте номер):
+1 - 🔵 Взять в работу
+2 - 🟢 Отметить как готовый
+3 - ✅ Отметить как выданный
+4 - 💬 Добавить комментарий
+5 - 🗑 Удалить заказ
+6 - 🔙 Назад к списку
+        """
+        await event.message.answer(text)
+
+    async def handle_admin_panel(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        if user_id not in self.admin_ids:
+            await event.message.answer("⛔ У вас нет прав администратора.")
+            return
+        await self.show_admin_panel(event)
+
+    async def show_my_orders(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        orders = self.db.get_user_orders(user_id)
+        if not orders:
+            await event.message.answer(
+                "📋 У вас нет заказов справок.\n\n"
+                "Чтобы заказать справку, отправьте 9 в главном меню."
+            )
+            return
+        text = f"📋 ВАШИ ЗАКАЗЫ (всего: {len(orders)})\n\n"
+        for order in orders:
+            status_display = self.STATUS_DISPLAY.get(order['status'], order['status'])
+            text += f"""
+🎫 Заказ #{order['order_id']}
+   Тип: {order['certificate_type']}
+   Статус: {status_display}
+   Дата: {order['order_date']}
+"""
+            if order['admin_comment']:
+                text += f"   Комментарий: {order['admin_comment']}\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 для возврата в главное меню"
+        await event.message.answer(text)
+
+    async def update_order_status_with_notification(self, event: MessageCreated, order_id: int, new_status: str = None,
+                                                    comment: str = None):
+        order = self.db.get_order_by_id(order_id)
+        if not order:
+            await event.message.answer("Заказ не найден.")
+            return False
+
+        success = self.db.update_order_status(order_id, new_status, comment)
+        if success:
+            if new_status:
+                status_display = self.STATUS_DISPLAY[new_status]
+                await event.message.answer(f"✅ Статус заказа #{order_id} изменен на '{status_display}'")
+
+                try:
+                    notification_text = f"""
+📢 ИЗМЕНЕНИЕ СТАТУСА ЗАКАЗА #{order_id}
+
+📄 Тип: {order['certificate_type']}
+🔄 Новый статус: {status_display}
+📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}
+"""
+                    if comment:
+                        notification_text += f"\n💬 Комментарий администратора:\n{comment}\n"
+                    if new_status == self.STATUS_READY:
+                        notification_text += "\n📎 Справка готова к выдаче! Обратитесь в учебный отдел."
+                    await event.bot.send_message(
+                        chat_id=order['user_id'],
+                        text=notification_text
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление: {e}")
+            else:
+                await event.message.answer(f"✅ Комментарий добавлен к заказу #{order_id}")
+            return True
+        await event.message.answer("❌ Не удалось изменить статус заказа.")
+        return False
+
+    async def start_order(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_states[user_id] = {'step': 'waiting_name'}
+        await event.message.answer(
+            "📄 ЗАКАЗ СПРАВКИ\n\n"
+            "Введите ваше полное ФИО:\n"
+            "Пример: Иванов Иван Иванович\n\n"
+            "🔙 Отправьте 0 для отмены")
+
+    async def handle_order_flow(self, event: MessageCreated, text: str, user_id: int):
+        state = self.user_states[user_id]
+        if state['step'] == 'waiting_name':
+            if text == '0':
+                del self.user_states[user_id]
+                await self.show_main_menu(event)
+                return
+            self.user_states[user_id]['name'] = text
+            self.user_states[user_id]['step'] = 'waiting_group'
+            await event.message.answer(
+                "📚 Введите номер группы:\n"
+                "Пример: 414\n\n"
+                "🔙 Отправьте 0 для отмены")
+            return
+
+        elif state['step'] == 'waiting_group':
+            if text == '0':
+                del self.user_states[user_id]
+                await self.show_main_menu(event)
+                return
+            self.user_states[user_id]['group'] = text
+            self.user_states[user_id]['step'] = 'waiting_type'
+            await event.message.answer(
+                "📄 ВЫБЕРИТЕ ТИП СПРАВКИ:\n\n"
+                "1 - Справка об обучении\n"
+                "2 - Академическая справка\n"
+                "3 - Справка о состоянии здоровья\n"
+                "4 - Справка о проживании в общежитии\n"
+                "5 - Другое (напишите вручную)\n\n"
+                "Отправьте номер или напишите свой вариант:\n"
+                "🔙 Отправьте 0 для отмены")
+            return
+        elif state['step'] == 'waiting_type':
+            if text == '0':
+                del self.user_states[user_id]
+                await self.show_main_menu(event)
+                return
+            name = self.user_states[user_id]['name']
+            group = self.user_states[user_id]['group']
+            type_map = {
+                '1': 'Справка об обучении',
+                '2': 'Академическая справка',
+                '3': 'Справка о состоянии здоровья',
+                '4': 'Справка о проживании в общежитии'
+            }
+            cert_type = type_map.get(text, text)
+            order_id = self.db.save_order(user_id, name, group, cert_type)
+            del self.user_states[user_id]
+            await event.message.answer(
+                f"✅ ЗАКАЗ НА СПРАВКУ #{order_id} ПРИНЯТ!\n\n"
+                f"👤 ФИО: {name}\n"
+                f"📚 Группа: {group}\n"
+                f"📄 Тип: {cert_type}\n\n"
+                f"📋 Вы можете отслеживать статус заказа через команду /my_orders\n\n"
+                f"🔙 Отправьте 0 для возврата в меню")
+
+            for admin_id in self.admin_ids:
+                try:
+                    await event.bot.send_message(
+                        chat_id=admin_id,
+                        text=f"🔔 НОВЫЙ ЗАКАЗ СПРАВКИ #{order_id}\n"
+                             f"👤 {name}\n"
+                             f"📚 {group}\n"
+                             f"📄 {cert_type}\n\n"
+                             f"Используйте /admin для просмотра заказов")
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление админу: {e}")
+            await self.show_main_menu(event)
+            return
+
+    async def show_specialties_types(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'specialties_types'
+        types = self.db.get_types_of_specialties()
+        if not types:
+            await event.message.answer("Информация о специальностях временно недоступна.\n\n🔙 Отправьте 0 для возврата")
+            return
+        text = "🎓 ВЫБЕРИТЕ ТИП СПЕЦИАЛЬНОСТИ:\n\n"
+        for t in types:
+            text += f"{t['tos_id']} - {t['name']}\n"
+        text += "\nОтправьте номер типа специальности или 0 для возврата:"
+        await event.message.answer(text)
+
+    async def show_specialties_by_type(self, event: MessageCreated, type_id: int):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'specialties_list'
+        types = self.db.get_types_of_specialties()
+        type_name = None
+        for t in types:
+            if t['tos_id'] == type_id:
+                type_name = t['name']
+                break
+        if not type_name:
+            await event.message.answer("Тип специальности не найден.")
+            await self.show_specialties_types(event)
+            return
+        specialties = self.db.get_specialties_by_type(type_id)
+        if not specialties:
+            await event.message.answer(f"В разделе '{type_name}' пока нет специальностей.")
+            await self.show_specialties_types(event)
+            return
+
+        text = f"🎓 {type_name}\n\n"
+        for spec in specialties:
+            text += f"📌 {spec['code']} - {spec['name']}\n"
+            if spec['description']:
+                text += f"   {spec['description']}\n"
+            if spec['duration_years']:
+                text += f"   ⏰ Срок обучения: {spec['duration_years']}\n"
+            if spec['budget_places']:
+                text += f"   🎯 Бюджетных мест: {spec['budget_places']}\n"
+            if spec['paid_places']:
+                text += f"   💰 Платных мест: {spec['paid_places']}\n"
+            if spec['price_per_year']:
+                text += f"   💵 Стоимость: {spec['price_per_year']} руб/год\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 чтобы вернуться к выбору типа специальности"
+        await event.message.answer(text)
+
+    async def show_dormitory(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        prices = self.db.get_dormitory_prices()
+        text = "🏠 ИНФОРМАЦИЯ ОБ ОБЩЕЖИТИИ\n\n"
+        if prices:
+            text += "Стоимость проживания:\n"
+            for price in prices:
+                text += f"• {price['type_places']}: {price['price_per_month']} руб/мес\n"
+        else:
+            text += "Информация о стоимости проживания временно недоступна.\n"
+        text += "\n🔙 Отправьте 0 для возврата"
+        await event.message.answer(text)
+
+    async def show_contacts(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        contacts = self.db.get_contacts()
+        if not contacts:
+            await event.message.answer(
+                "📞 КОНТАКТНАЯ ИНФОРМАЦИЯ\n\nИнформация временно недоступна.\n\n🔙 Отправьте 0 для возврата")
+            return
+        text = "📞 КОНТАКТНАЯ ИНФОРМАЦИЯ\n\n"
+        for contact in contacts:
+            if contact['phone']:
+                text += f"📱 Телефон: {contact['phone']}\n"
+            if contact['email']:
+                text += f"📧 Email: {contact['email']}\n"
+            if contact['address']:
+                text += f"🏢 Адрес: {contact['address']}\n"
+            if contact['working_hours']:
+                text += f"🕐 Часы работы: {contact['working_hours']}\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 для возврата"
+        await event.message.answer(text)
+
+    async def show_dates(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        dates = self.db.get_important_dates()
+        if not dates:
+            await event.message.answer(
+                "📅 ВАЖНЫЕ ДАТЫ\n\nНа данный момент нет актуальных дат.\n\n🔙 Отправьте 0 для возврата")
+            return
+        text = "📅 ВАЖНЫЕ ДАТЫ\n\n"
+        for date_item in dates:
+            text += f"📌 {date_item['title']}\n   📅 Дата: {date_item['date_value']}\n"
+            if date_item['description']:
+                text += f"   📝 {date_item['description']}\n"
+            text += "\n"
+        text += "\n🔙 Отправьте 0 для возврата"
+        await event.message.answer(text)
+
+    async def show_activities(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+
+        try:
+            activities = self.db.get_sports_activities()
+        except Exception as e:
+            logger.error(f"Ошибка получения активностей: {e}")
+            await event.message.answer(
+                "⚽ ВНЕУРОЧНЫЕ АКТИВНОСТИ\n\n"
+                "Произошла ошибка при загрузке данных.\n\n"
+                "🔙 Отправьте 0 для возврата")
+            return
+
+        if not activities:
+            await event.message.answer(
+                "⚽ ВНЕУРОЧНЫЕ АКТИВНОСТИ\n\n"
+                "Информация временно недоступна.\n\n"
+                "🔙 Отправьте 0 для возврата")
+            return
+
+        text = "⚽ ВНЕУРОЧНЫЕ АКТИВНОСТИ\n\n"
+        for activity in activities:
+            text += f"🏆 {activity['name']}\n"
+            if activity['venue_name']:
+                text += f"   📍 Место проведения: {activity['venue_name']}\n"
+            text += "\n"
+
+        text += "\n🔙 Отправьте 0 для возврата"
+        await event.message.answer(text)
+
+    async def show_help(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        text = """
+🔍 СПРАВКА ПО КОМАНДАМ
+
+Основные команды:
+/start - Главное меню
+/my_orders - Мои заказы справок
+
+Навигация по меню:
+1 - 🎓 Специальности
+2 - 🏠 Общежитие
+3 - 🕐 Расписание
+4 - 📞 Контакты
+5 - 📅 Важные даты
+6 - 📜 Документы и правила
+7 - ❓ Абитуриентам
+8 - ⚽ Внеурочные активности
+9 - 📄 Заказать справку
+10 - 📋 Мои заказы
+
+0 - Вернуться в главное меню
+
+💡 Подсказка: В разделе "Расписание" можно написать день недели (пн, вт, ср, чт, пт, сб), чтобы посмотреть расписание на конкретный день.
+        """
+        await event.message.answer(text)
+
+    async def handle_message(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        text = event.message.body.text
+
+        if user_id in self.user_states:
+            await self.handle_order_flow(event, text, user_id)
+            return
+
+        menu_state = self.user_menu_state.get(user_id, 'main')
+
+        if menu_state == 'admin_panel':
+            if text == '0':
+                await self.show_main_menu(event)
+            elif text == '1':
+                await self.show_orders_by_status(event, self.STATUS_NEW)
+            elif text == '2':
+                await self.show_orders_by_status(event, self.STATUS_IN_PROGRESS)
+            elif text == '3':
+                await self.show_orders_by_status(event, self.STATUS_READY)
+            elif text == '4':
+                await self.show_orders_by_status(event, self.STATUS_COMPLETED)
+            elif text == '5':
+                await self.show_orders_by_status(event, None)
+            elif text == '6':
+                await event.message.answer("🔍 Введите ID заказа для поиска:")
+                self.user_menu_state[user_id] = 'admin_search_order'
+            else:
+                await event.message.answer("❌ Неверная команда. Пожалуйста, выберите действие от 0 до 6.")
+            return
+
+        if menu_state == 'admin_search_order':
+            if text == '0':
+                await self.show_admin_panel(event)
+            elif text.isdigit():
+                order_id = int(text)
+                order = self.db.get_order_by_id(order_id)
+                if order:
+                    self.user_menu_state[user_id] = 'admin_viewing_single_order'
+                    self.current_order_id = order_id
+                    await self.send_order_card(event, order)
+                else:
+                    await event.message.answer(
+                        "❌ Заказ с таким ID не найден. Попробуйте снова или отправьте 0 для возврата.")
+            else:
+                await event.message.answer("❌ Пожалуйста, отправьте числовой ID заказа или 0 для возврата.")
+            return
+
+        if menu_state == 'admin_viewing_orders':
+            if text == '0':
+                await self.show_admin_panel(event)
+            elif text.isdigit():
+                order_id = int(text)
+                order = self.db.get_order_by_id(order_id)
+                if order:
+                    self.user_menu_state[user_id] = 'admin_viewing_single_order'
+                    self.current_order_id = order_id
+                    await self.send_order_card(event, order)
+                else:
+                    await event.message.answer("❌ Заказ не найден. Отправьте 0 для возврата.")
+            else:
+                await event.message.answer("❌ Отправьте ID заказа для просмотра или 0 для возврата.")
+            return
+
+        if menu_state == 'admin_viewing_single_order':
+            if text == '0':
+                await self.show_admin_panel(event)
+            elif text == '1':
+                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_IN_PROGRESS,
+                                                                 None)
+                order = self.db.get_order_by_id(self.current_order_id)
+                await self.send_order_card(event, order)
+            elif text == '2':
+                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_READY, None)
+                order = self.db.get_order_by_id(self.current_order_id)
+                await self.send_order_card(event, order)
+            elif text == '3':
+                await self.update_order_status_with_notification(event, self.current_order_id, self.STATUS_COMPLETED,
+                                                                 None)
+                order = self.db.get_order_by_id(self.current_order_id)
+                await self.send_order_card(event, order)
+            elif text == '4':
+                await event.message.answer("💬 Введите комментарий к заказу:")
+                self.user_menu_state[user_id] = 'admin_add_comment'
+            elif text == '5':
+                success = self.db.delete_order(self.current_order_id)
+                if success:
+                    await event.message.answer(f"✅ Заказ #{self.current_order_id} удален.")
+                    await self.show_admin_panel(event)
+                else:
+                    await event.message.answer("❌ Не удалось удалить заказ.")
+            elif text == '6':
+                await self.show_admin_panel(event)
+            else:
+                await event.message.answer("❌ Неверная команда. Отправьте номер действия (1-6) или 0 для возврата.")
+            return
+
+        if menu_state == 'admin_add_comment':
+            if text == '0':
+                await self.show_admin_panel(event)
+            else:
+                await self.update_order_status_with_notification(event, self.current_order_id, None, text)
+                self.user_menu_state[user_id] = 'admin_viewing_single_order'
+                order = self.db.get_order_by_id(self.current_order_id)
+                await self.send_order_card(event, order)
+            return
+
+        if text == '0':
+            await self.show_main_menu(event)
+            return
+
+        if menu_state == 'schedule_menu':
+            day_variants = ['пн', 'пн.', 'понедельник', 'вт', 'вт.', 'вторник',
+                            'ср', 'ср.', 'среда', 'чт', 'чт.', 'четверг',
+                            'пт', 'пт.', 'пятница', 'сб', 'сб.', 'суббота']
+            if text.lower() in day_variants:
+                await self.show_schedule_for_day(event, text)
+                return
+
+        if menu_state == 'specialties_types':
+            if text.isdigit() and int(text) > 0:
+                type_id = int(text)
+                types = self.db.get_types_of_specialties()
+                type_ids = [t['tos_id'] for t in types]
+                if type_id in type_ids:
+                    await self.show_specialties_by_type(event, type_id)
+                else:
+                    await event.message.answer("❌ Неверный номер. Попробуйте снова:")
+            else:
+                await event.message.answer("❌ Пожалуйста, отправьте номер типа специальности:")
+            return
+
+        if menu_state == 'specialties_list':
+            if text == '0':
+                await self.show_specialties_types(event)
+            else:
+                await event.message.answer("🔙 Отправьте 0 чтобы вернуться")
+            return
+
+        if text == '/start':
+            await self.show_main_menu(event)
+        elif text == '/admin':
+            await self.handle_admin_panel(event)
+        elif text == '/my_orders':
+            await self.show_my_orders(event)
+        elif text == '1':
+            await self.show_specialties_types(event)
+        elif text == '2':
+            await self.show_dormitory(event)
+        elif text == '3':
+            await self.show_schedule(event)
+        elif text == '4':
+            await self.show_contacts(event)
+        elif text == '5':
+            await self.show_dates(event)
+        elif text == '6':
+            await self.show_documents(event)
+        elif text == '7':
+            await self.show_for_applicants(event)
+        elif text == '8':
+            await self.show_activities(event)
+        elif text == '9':
+            await self.start_order(event)
+        elif text == '10':
+            await self.show_my_orders(event)
+        elif text == '/help':
+            await self.show_help(event)
+        else:
+            await event.message.answer(
+                "❓ Неизвестная команда.\n\n"
+                "Отправьте /start для главного меню или /help для справки.")
+
+    async def start(self):
+        await self.dp.start_polling(self.bot)
+
+
+def main():
+    config = Config()
+    db = Database(config)
+    bot = AdmissionsBot(config.bot_token, db, config.admin_ids, config)
+    try:
+        asyncio.run(bot.start())
+    except KeyboardInterrupt:
+        print("\nБот остановлен")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()
