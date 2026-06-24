@@ -271,6 +271,24 @@ class AdmissionsBot:
         async def on_message(event: MessageCreated):
             await self.handle_message(event)
 
+    async def show_for_applicants(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        self.user_menu_state[user_id] = 'main'
+        documents = self.db.get_documents()
+        text = "❓ КАК СТАТЬ СТУДЕНТОМ?\n\n"
+        if documents:
+            text += "Необходимые документы для поступления:\n\n"
+            for doc in documents:
+                required = "✅ Обязательный" if doc['is_required'] else "ℹ️ Дополнительный"
+                text += f"📄 {doc['name']} - {required}\n"
+                if doc['description']:
+                    text += f"   {doc['description']}\n"
+                text += "\n"
+        else:
+            text += "Информация о документах временно недоступна.\n"
+        text += "\n🔙 Отправьте 0 для возврата"
+        await event.message.answer(text)
+
     async def show_main_menu(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         self.user_menu_state[user_id] = 'main'
@@ -295,8 +313,6 @@ class AdmissionsBot:
 8 - ⚽ Внеурочные активности
 9 - 📄 Заказать справку
 10 - 📋 Мои заказы{orders_badge}
-
-0 - 🔙 Помощь
 
 ➡️ Отправьте номер раздела:
         """
